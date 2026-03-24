@@ -12,6 +12,8 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "lvgl_display.h"
+#include "lvgl_image.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -19,8 +21,18 @@
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
+#include <esp_heap_caps.h>
+#include <algorithm>
 
 #define TAG "Application"
+
+namespace {
+
+constexpr size_t kImageDownloadMaxBytes = 500 * 1024;
+constexpr int kImageDownloadTaskPriority = 2;
+constexpr uint32_t kImageDownloadTaskStackSize = 6 * 1024;
+
+}  // namespace
 
 
 Application::Application() {
@@ -76,6 +88,10 @@ Application::~Application() {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
     }
+    if (image_download_queue_ != nullptr) {
+        vQueueDelete(image_download_queue_);
+        image_download_queue_ = nullptr;
+    }
     vEventGroupDelete(event_group_);
 }
 
@@ -109,6 +125,7 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     audio_service_.SetCallbacks(callbacks);
+    InitImageDownloadTask();
 
     // Add state change listeners
     state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
@@ -708,6 +725,9 @@ void Application::InitializeProtocol() {
                 cJSON* subtype = cJSON_GetObjectItem(payload, "type");
                 if (cJSON_IsString(subtype) && cJSON_IsString(message)) {
                     ESP_LOGI(TAG, "app subtype: %s message: %s\n", subtype->valuestring, message->valuestring);
+                    if (strcmp(subtype->valuestring, "textToImg") == 0) {
+                        EnqueueImageDownload(message->valuestring);
+                    }
                 }
             }
         } else if (strcmp(type->valuestring, "alarm") == 0) {
@@ -744,6 +764,160 @@ void Application::InitializeProtocol() {
     });
     
     protocal_started_ = protocol_->Start();
+}
+
+void Application::InitImageDownloadTask() {
+    if (image_download_queue_ == nullptr) {
+        image_download_queue_ = xQueueCreate(1, sizeof(ImageDownloadRequest));
+    }
+    if (image_download_queue_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create image download queue");
+        return;
+    }
+
+    if (image_download_task_handle_ == nullptr) {
+        BaseType_t ret = xTaskCreate(
+            &Application::ImageDownloadTaskEntry,
+            "img_fetch",
+            kImageDownloadTaskStackSize,
+            this,
+            kImageDownloadTaskPriority,
+            &image_download_task_handle_);
+        if (ret != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create image download task");
+            image_download_task_handle_ = nullptr;
+        }
+    }
+}
+
+void Application::EnqueueImageDownload(const std::string& url) {
+    if (image_download_queue_ == nullptr || url.empty()) {
+        return;
+    }
+
+    ImageDownloadRequest request;
+    request.generation = ++image_download_generation_;
+    strlcpy(request.url, url.c_str(), sizeof(request.url));
+
+    if (xQueueOverwrite(image_download_queue_, &request) != pdPASS) {
+        ESP_LOGW(TAG, "Failed to enqueue image download request");
+    }
+}
+
+void Application::ImageDownloadTaskEntry(void* arg) {
+    auto* app = static_cast<Application*>(arg);
+    app->ImageDownloadTask();
+}
+
+void Application::ImageDownloadTask() {
+    while (true) {
+        ImageDownloadRequest request;
+        if (xQueueReceive(image_download_queue_, &request, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (request.url[0] == '\0') {
+            continue;
+        }
+
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
+        if (!http) {
+            ESP_LOGE(TAG, "CreateHttp failed for image url: %s", request.url);
+            continue;
+        }
+
+        bool should_render = false;
+        void* image_data = nullptr;
+        size_t total_read = 0;
+
+        do {
+            if (!http->Open("GET", request.url)) {
+                ESP_LOGW(TAG, "Open image url failed: %s", request.url);
+                break;
+            }
+
+            if (http->GetStatusCode() != 200) {
+                ESP_LOGW(TAG, "Image download failed, status=%d, url=%s", http->GetStatusCode(), request.url);
+                break;
+            }
+
+            size_t content_length = http->GetBodyLength();
+            if (content_length == 0 || content_length > kImageDownloadMaxBytes) {
+                ESP_LOGW(TAG, "Invalid image size %u, url=%s", static_cast<unsigned>(content_length), request.url);
+                break;
+            }
+
+            image_data = heap_caps_malloc(content_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (image_data == nullptr) {
+                image_data = heap_caps_malloc(content_length, MALLOC_CAP_8BIT);
+            }
+            if (image_data == nullptr) {
+                ESP_LOGE(TAG, "Allocate image buffer failed, len=%u", static_cast<unsigned>(content_length));
+                break;
+            }
+
+            while (total_read < content_length) {
+                if (request.generation != image_download_generation_.load()) {
+                    ESP_LOGI(TAG, "Cancel stale image download, url=%s", request.url);
+                    break;
+                }
+
+                size_t remain = content_length - total_read;
+                int ret = http->Read(static_cast<char*>(image_data) + total_read, std::min(remain, static_cast<size_t>(4096)));
+                if (ret < 0) {
+                    ESP_LOGW(TAG, "Read image body failed, url=%s", request.url);
+                    break;
+                }
+                if (ret == 0) {
+                    break;
+                }
+                total_read += static_cast<size_t>(ret);
+            }
+
+            if (request.generation != image_download_generation_.load()) {
+                break;
+            }
+            if (total_read == 0 || total_read != content_length) {
+                ESP_LOGW(TAG, "Image body incomplete, expected=%u actual=%u url=%s",
+                         static_cast<unsigned>(content_length), static_cast<unsigned>(total_read), request.url);
+                break;
+            }
+            should_render = true;
+        } while (false);
+
+        http->Close();
+
+        if (!should_render) {
+            if (image_data != nullptr) {
+                heap_caps_free(image_data);
+            }
+            continue;
+        }
+
+        if (request.generation != image_download_generation_.load()) {
+            heap_caps_free(image_data);
+            continue;
+        }
+
+        LvglAllocatedImage* raw_image = nullptr;
+        try {
+            raw_image = new LvglAllocatedImage(image_data, total_read);
+        } catch (const std::exception& e) {
+            ESP_LOGW(TAG, "Decode image failed, url=%s, error=%s", request.url, e.what());
+            heap_caps_free(image_data);
+            continue;
+        }
+
+        Schedule([raw_image]() {
+            std::unique_ptr<LvglImage> image(raw_image);
+            auto* display = Board::GetInstance().GetDisplay();
+            auto* lvgl_display = dynamic_cast<LvglDisplay*>(display);
+            if (lvgl_display == nullptr) {
+                ESP_LOGW(TAG, "Display does not support preview image");
+                return;
+            }
+            lvgl_display->SetPreviewImage(std::move(image));
+        });
+    }
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
