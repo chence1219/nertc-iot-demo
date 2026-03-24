@@ -3,6 +3,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include <freertos/queue.h>
 #include <freertos/task.h>
 #include <esp_timer.h>
 
@@ -10,6 +11,7 @@
 #include <mutex>
 #include <deque>
 #include <memory>
+#include <atomic>
 
 #include "protocol.h"
 #include "ota.h"
@@ -205,9 +207,21 @@ private:
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
+    void InitImageDownloadTask();
+    void EnqueueImageDownload(const std::string& url);
+    static void ImageDownloadTaskEntry(void* arg);
+    void ImageDownloadTask();
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);
+
+    struct ImageDownloadRequest {
+        uint32_t generation = 0;
+        char url[384] = {0};
+    };
+    QueueHandle_t image_download_queue_ = nullptr;
+    TaskHandle_t image_download_task_handle_ = nullptr;
+    std::atomic<uint32_t> image_download_generation_{0};
 
 #if CONFIG_CONNECTION_TYPE_NERTC
     // app start
