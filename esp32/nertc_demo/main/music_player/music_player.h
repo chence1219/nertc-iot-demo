@@ -2,6 +2,8 @@
 #define MUSIC_PLAYER_H 
 #include "audio/audio_codec.h"
 #include "audio/audio_service.h"
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 #include "esp_log.h"
@@ -221,7 +223,7 @@ public:
     void PlayStateCallback(music_player_state_t state);
     MusicProgress GetProgress();
     MusicPlayingInfo GetCurrentMusicPlayingInfo();
-    music_player_state_t GetPlayerState() const { return current_state_; }
+    music_player_state_t GetPlayerState() const { return current_state_.load(); }
     void InterruptPlay(){
         if(!initialed){
             return;
@@ -246,7 +248,7 @@ private:
     AudioCodec* codec_ = nullptr;
     MusicListManager music_list_manager_;
     AudioService* audio_service_;
-    music_player_state_t current_state_ = music_player_state_t::MUSIC_PLAYER_STATE_NONE;
+    std::atomic<music_player_state_t> current_state_{music_player_state_t::MUSIC_PLAYER_STATE_NONE};
     bool is_air_music_playing_ = true;
     std::mutex call_back_mutex_;
     bool initialed = false;

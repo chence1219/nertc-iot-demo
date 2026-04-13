@@ -1,10 +1,18 @@
 {
 	"audio_config": {
-		"frame_size": 60
+		"frame_size": 60,
+		"afe_agc": {
+			"enabled": false,
+			"mode": 0,
+			"compression_gain_db": 9,
+			"target_level_dbfs": 3
+		}
 	},
 	"license_config": {
 		"license": ""
 	},
+	"ext_net_handle": false,
+	"ext_osal_handle": true,
 	"appkey":"xxxxxxxx",
 	"blufi_wifi" : true
 }

@@ -53,6 +53,7 @@ void McpServer::AddCommonTools() {
             return board.GetDeviceStatusJson();
         });
 
+#if CONFIG_CONNECTION_TYPE_NERTC
     AddTool("self.good_bye",
         "用户有明确离开意图的时候，比如说“再见”、“我要休息啦”、“拜拜啦”、“goodbye”、“byebye”等等，调用它。",
         PropertyList(),
@@ -61,6 +62,7 @@ void McpServer::AddCommonTools() {
             app.SetAISleep();
             return true;
         });
+#endif
 
     AddTool("self.audio_speaker.set_volume", 
         "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
@@ -167,6 +169,7 @@ void McpServer::AddCommonTools() {
     }
 #endif
 
+#if CONFIG_CONNECTION_TYPE_NERTC
     AddTool("self.cancel_alarm_ringing",
         "识别用户取消闹钟铃声的意图，无论当前是否有闹钟都要触发该工具。",
         PropertyList(),
@@ -175,6 +178,7 @@ void McpServer::AddCommonTools() {
             bool success = instance.CancelAlarm();
             return success ? "{\"success\": true, \"message\": \"Cancel alarm ringing successfully\"}" : "{\"success\": false, \"message\": \"Cancel alarm ringing failed because no alarm exist\"}";
         });
+#endif
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
@@ -368,6 +372,10 @@ void McpServer::AddTool(McpTool* tool) {
 
 void McpServer::AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback) {
     AddTool(new McpTool(name, description, properties, callback));
+}
+
+void McpServer::AddTool(const std::string& name, int version, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback) {
+    AddTool(new McpTool(name, version, properties, std::move(callback)));
 }
 
 void McpServer::AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback) {
@@ -607,6 +615,10 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
     }
 
     PropertyList arguments = (*tool_iter)->properties();
+    if (arguments.empty() && cJSON_IsObject(tool_arguments) && cJSON_GetArraySize(tool_arguments) > 0) {
+        ESP_LOGE(TAG, "tools/call: Tool %s v%d has no registered argument definitions but received arguments",
+                 (*tool_iter)->name().c_str(), (*tool_iter)->version());
+    }
     try {
         for (auto& argument : arguments) {
             bool found = false;

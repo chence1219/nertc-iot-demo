@@ -15,9 +15,6 @@
 #include <src/misc/cache/lv_cache.h>
 
 #include "board.h"
-#if CONFIG_USE_MUSIC_PLAYER
-#include "music_player/music_player.h"
-#endif
 
 #define TAG "LcdDisplay"
 
@@ -659,7 +656,6 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(emoji_label_, FONT_AWESOME_MICROCHIP_AI);
 
-    SetupMusicInfoPanel();
 }
 
 
@@ -1134,7 +1130,6 @@ void LcdDisplay::SetupUI() {
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 
-    SetupMusicInfoPanel();
 }
 
 void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
@@ -1195,114 +1190,6 @@ void LcdDisplay::ClearChatMessages() {
     }
 }
 #endif
-
-void LcdDisplay::SetupMusicInfoPanel() {
-    // Called from within SetupUI(), which already holds the DisplayLockGuard.
-    // Do NOT acquire the lock here again.
-    // Use content_ as parent if available (wechat style), otherwise use screen.
-    lv_obj_t* parent = lv_screen_active();
-    if (parent == nullptr) return;
-
-    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
-    auto text_font = lvgl_theme->text_font()->font();
-
-    // Semi-transparent overlay anchored at top-left
-    music_info_panel_ = lv_obj_create(parent);
-    lv_obj_set_style_layout(music_info_panel_, LV_LAYOUT_NONE, 0);
-    lv_obj_add_flag(music_info_panel_, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_align(music_info_panel_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_set_width(music_info_panel_, LV_PCT(100));
-    lv_obj_set_height(music_info_panel_, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(music_info_panel_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(music_info_panel_, LV_OPA_70, 0);
-    lv_obj_set_style_radius(music_info_panel_, 0, 0);
-    lv_obj_set_style_border_width(music_info_panel_, 0, 0);
-    lv_obj_set_style_pad_all(music_info_panel_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_pad_row(music_info_panel_, lvgl_theme->spacing(2), 0);
-    lv_obj_set_flex_flow(music_info_panel_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(music_info_panel_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_scrollbar_mode(music_info_panel_, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_flag(music_info_panel_, LV_OBJ_FLAG_HIDDEN);
-
-    // Song name — scrolling
-    music_name_label_ = lv_label_create(music_info_panel_);
-    lv_obj_set_width(music_name_label_, LV_PCT(100));
-    lv_label_set_long_mode(music_name_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_color(music_name_label_, lv_color_white(), 0);
-    lv_label_set_text(music_name_label_, "");
-
-    // Artist · Album — truncate with dots
-    music_meta_label_ = lv_label_create(music_info_panel_);
-    lv_obj_set_width(music_meta_label_, LV_PCT(100));
-    lv_label_set_long_mode(music_meta_label_, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(music_meta_label_, lv_color_hex(0xAAAAAA), 0);
-    lv_label_set_text(music_meta_label_, "");
-
-    // Progress row: [bar .................. ] [time]
-    lv_obj_t* progress_row = lv_obj_create(music_info_panel_);
-    lv_obj_set_width(progress_row, LV_PCT(100));
-    lv_obj_set_height(progress_row, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(progress_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(progress_row, 0, 0);
-    lv_obj_set_style_pad_all(progress_row, 0, 0);
-    lv_obj_set_flex_flow(progress_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(progress_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(progress_row, lvgl_theme->spacing(2), 0);
-    lv_obj_set_scrollbar_mode(progress_row, LV_SCROLLBAR_MODE_OFF);
-
-    music_progress_bar_ = lv_bar_create(progress_row);
-    lv_obj_set_flex_grow(music_progress_bar_, 1);
-    lv_obj_set_height(music_progress_bar_, 4);
-    lv_bar_set_range(music_progress_bar_, 0, 1000);
-    lv_bar_set_value(music_progress_bar_, 0, LV_ANIM_OFF);
-
-    music_time_label_ = lv_label_create(progress_row);
-    lv_obj_set_style_text_color(music_time_label_, lv_color_white(), 0);
-    lv_obj_set_style_text_font(music_time_label_, text_font, 0);
-    lv_label_set_text(music_time_label_, "00:00 / 00:00");
-}
-
-void LcdDisplay::UpdateMusicInfo() {
-#if CONFIG_USE_MUSIC_PLAYER
-    if (music_info_panel_ == nullptr) return;
-
-    auto& player = MusicPlayer::GetInstance();
-    bool playing = (player.GetPlayerState() == MUSIC_PLAYER_STATE_PLAYING);
-
-    DisplayLockGuard lock(this);
-    if (!playing) {
-        lv_obj_add_flag(music_info_panel_, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-
-    lv_obj_remove_flag(music_info_panel_, LV_OBJ_FLAG_HIDDEN);
-    auto info = player.GetCurrentMusicPlayingInfo();
-
-    lv_label_set_text(music_name_label_, info.name.empty() ? "..." : info.name.c_str());
-
-    char meta_buf[128];
-    snprintf(meta_buf, sizeof(meta_buf), "%s · %s",
-             info.artist.c_str(), info.album.c_str());
-    lv_label_set_text(music_meta_label_, meta_buf);
-
-    if (info.duration_ms > 0) {
-        int val = (int)((int64_t)info.position_ms * 1000 / info.duration_ms);
-        lv_bar_set_value(music_progress_bar_, val, LV_ANIM_OFF);
-    }
-
-    char time_buf[24];
-    snprintf(time_buf, sizeof(time_buf), "%02u:%02u / %02u:%02u",
-             info.position_ms / 60000, (info.position_ms / 1000) % 60,
-             info.duration_ms / 60000, (info.duration_ms / 1000) % 60);
-    lv_label_set_text(music_time_label_, time_buf);
-#endif
-}
-
-void LcdDisplay::UpdateStatusBar(bool update_all) {
-    LvglDisplay::UpdateStatusBar(update_all);
-    UpdateMusicInfo();
-}
-
 
 void LcdDisplay::SetEmotion(const char* emotion) {
     if (!setup_ui_called_) {

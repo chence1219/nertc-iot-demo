@@ -192,7 +192,10 @@ void Board::StartBlufiMode(bool blufi) {
 
     auto& application = Application::GetInstance();
     application.PlaySound(Lang::Sounds::OGG_BLUFI);
-    bool test_mode = application.GetNertcTestMode();
+    bool test_mode = false;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    test_mode = application.GetNertcTestMode();
+#endif
     
     {
         auto app_desc = esp_app_get_description();

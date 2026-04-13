@@ -153,6 +153,9 @@ void Mp3OnlinePlayer::Mp3OnlinePlayerInit(mp3_player_output_cb_t output_cb, mp3_
     user_context_ = output_cb_arg;
 }
 
+namespace {
+constexpr int kMaxConsecutiveDecodeErrors = 64;
+}
 
 
 unsigned int Mp3OnlinePlayer::GetPositionMs() const
@@ -215,9 +218,9 @@ bool Mp3OnlinePlayer::StartStreaming(const std::string &music_url)
 
     // 配置线程栈大小以避免栈溢出
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    cfg.stack_size = 8192; // 8KB栈大小
+    cfg.stack_size = 8192 * 2; // 8KB栈大小
     cfg.prio = 16;          // 中等优先级，确保不会被其他高优先级任务频繁抢占导致调度问题
-    cfg.thread_name = "audio_stream";
+    cfg.thread_name = "audio_stream_download";
     cfg.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     esp_pthread_set_cfg(&cfg);
 
@@ -227,6 +230,8 @@ bool Mp3OnlinePlayer::StartStreaming(const std::string &music_url)
 
     // 开始播放线程（会等待缓冲区有足够数据）
     is_playing_ = true;
+    cfg.thread_name = "audio_stream_play";
+    esp_pthread_set_cfg(&cfg);
     play_thread_ = std::thread(&Mp3OnlinePlayer::PlayAudioStream, this);
 
     ESP_LOGI(TAG, "Streaming threads started successfully");
@@ -627,6 +632,7 @@ void Mp3OnlinePlayer::PlayAudioStream()
     uint8_t *mp3_input_buffer = nullptr;
     int bytes_left = 0;
     uint8_t *read_ptr = nullptr;
+    int consecutive_decode_errors = 0;
 
     // 分配MP3输入缓冲区
     mp3_input_buffer = (uint8_t *)heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
@@ -737,6 +743,7 @@ void Mp3OnlinePlayer::PlayAudioStream()
 
         if (decode_result == 0)
         {
+            consecutive_decode_errors = 0;
             // 解码成功，获取帧信息
             MP3GetLastFrameInfo(mp3_decoder_, &mp3_frame_info_);
             if(duration_ms_ == 0 && mp3_frame_info_.bitrate > 0 && content_length_bytes_ > 0){
@@ -776,7 +783,34 @@ void Mp3OnlinePlayer::PlayAudioStream()
         else
         {
             // 解码失败
-            ESP_LOGW(TAG, "MP3 decode failed with error: %d", decode_result);
+            consecutive_decode_errors++;
+            if (consecutive_decode_errors == 1 ||
+                consecutive_decode_errors % 8 == 0 ||
+                consecutive_decode_errors >= kMaxConsecutiveDecodeErrors)
+            {
+                ESP_LOGW(TAG, "MP3 decode failed with error: %d (consecutive=%d)",
+                         decode_result, consecutive_decode_errors);
+            }
+
+            if (consecutive_decode_errors >= kMaxConsecutiveDecodeErrors)
+            {
+                ESP_LOGE(TAG, "Too many consecutive MP3 decode errors, stop playback");
+                if (player_state_ != music_player_state_t::MUSIC_PLAYER_STATE_ERROR)
+                {
+                    player_state_ = music_player_state_t::MUSIC_PLAYER_STATE_ERROR;
+                    if (event_cb_)
+                    {
+                        event_cb_(music_player_state_t::MUSIC_PLAYER_STATE_ERROR, user_context_);
+                    }
+                }
+                is_downloading_ = false;
+                is_playing_ = false;
+                {
+                    std::lock_guard<std::mutex> lock(buffer_mutex_);
+                    buffer_cv_.notify_all();
+                }
+                break;
+            }
             // 跳过一些字节继续尝试
             if (bytes_left > 1)
             {

@@ -1,0 +1,47 @@
+CONFIG_BOARD_TYPE_ZUOWEI_GEN5=y
+
+# ── Audio processor ──────────────────────────────────────────────────────────
+# VB6824 handles wake word in hardware; disable software AFE/wake-word to
+# free the Multinet model (~1.5-2 MB PSRAM) and AFE processor buffers.
+CONFIG_USE_AFE_WAKE_WORD=n
+CONFIG_USE_WAKE_WORD_DETECT=n
+CONFIG_USE_AUDIO_PROCESSOR=n
+
+# ── SPIRAM allocator tuning ───────────────────────────────────────────────────
+# Without these the WiFi/LwIP stacks and BSS segment eat internal SRAM and
+# leave the system unable to create new FreeRTOS tasks (pthread create failure).
+
+# Move WiFi + LwIP buffer pools from internal SRAM to PSRAM (~30-50 KB saved).
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Place BSS and NOINIT segments in PSRAM instead of internal SRAM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
+
+# Allow any heap allocation (not just >2 KB) to go to PSRAM when SRAM is low.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+
+# Reserve 64 KB of internal SRAM for DMA/ISR-safe allocations.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+
+# ── WiFi buffer tuning ────────────────────────────────────────────────────────
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_RX_BA_WIN=4
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=16
+
+# ── pthread stack ─────────────────────────────────────────────────────────────
+# Ensure streaming/player threads have enough stack (allocated from PSRAM).
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=10240
+CONFIG_PTHREAD_TASK_PRIO_DEFAULT=1
+
+# ── VB6824 UART port ──────────────────────────────────────────────────────────
+# VB6824 must use UART2; ML307 is hardcoded to UART1 (at_uart.h:#define UART_NUM UART_NUM_1).
+# Using the same port causes "UART driver already installed" crash on 4G switch.
+CONFIG_VB6824_UART_PORT=2
+
+# ── Console UART ──────────────────────────────────────────────────────────────
+# GPIO43/44 are shared between UART0 console and ML307 UART1 pins.
+# Move console to USB Serial/JTAG to free those pins for ML307.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

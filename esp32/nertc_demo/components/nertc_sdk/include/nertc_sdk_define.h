@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "nertc_sdk_ext_net.h"
+#include "nertc_sdk_ext_osal.h"
 
 #ifdef __cplusplus
 extern "C" {

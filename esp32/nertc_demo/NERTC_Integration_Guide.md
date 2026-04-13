@@ -2,7 +2,8 @@
 
 本文档面向在 **xiaozhi-esp32** 项目基础上集成网易云信 NERtc IoT SDK 的开发者，说明如何将 NERtc 能力引入现有工程。
 
-> **SDK 版本**：1.2.4
+> **SDK 版本**：1.2.5
+> **文档更新时间**：2026-04-13
 > **ESP-IDF 版本**：release-v5.4 / release-v5.5（兼容，见注意事项）
 > **Demo 工程路径**：`demo/esp32/`
 
@@ -173,8 +174,26 @@ idf_component_register(SRCS ${SOURCES}
 **核心文件**。封装了云信 AI 通道的完整通信逻辑，包括：
 - NERtc 引擎的创建、初始化、加入房间、AI 启动与销毁流程。
 - 音频帧推送（PCM / OPUS）与接收回调。
-- 从 SPIFFS 分区读取 `config.json`，加载 appkey、证书、音频参数等本地配置。
+- 从 SPIFFS 分区读取 `config.json`，加载 appkey、证书、音频参数，以及 `ext_net_handle` / `ext_osal_handle` 等本地开关。
 - 服务器下发 JSON 消息的解析（如 `system.sleep`、`updateSongList`、`alarm`、`app` 等扩展指令）。
+
+当前 demo 在调用 `nertc_init_engine` 前，会先读取 `config.json` 中的 `ext_net_handle` 与 `ext_osal_handle`：
+
+```cpp
+if (use_ext_net_handle) {
+    engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
+} else {
+    engine_config.ext_net_handle = nullptr;
+}
+
+if (use_ext_osal_handle) {
+    engine_config.ext_osal_handle = NeRtcExternalOsal::GetInstance()->GetHandle();
+} else {
+    engine_config.ext_osal_handle = nullptr;
+}
+```
+
+也就是说，示例工程中是否启用外部网络 / 外部 OSAL，不再由示例代码写死，而是由 `create_local_config/config.json.s3`（或 `config.json.c3`）里的布尔开关决定。
 
 #### 4.5.3 `nertc_external_network.cc`
 
@@ -188,21 +207,53 @@ idf_component_register(SRCS ${SOURCES}
 | **ESP32-P4 + ESP-Hosted 仆从芯片** | **P4 无内置 WiFi**，通过 SPI/SDIO 连接仆从 ESP32 提供网络，网络操作需通过 esp-hosted host API 实现，必须设置外部 handle。仆从芯片固件参考 https://github.com/espressif/esp-hosted（详见[第 8.5 节](#85-esp32-p4--esp-hosted-仆从芯片网络接入)） |
 | **IDF 版本不一致** | SDK 预编译库的 IDF 版本与用户工程不同时，SDK 内置网络栈可能存在 ABI 不兼容（如 `esp_http_client`、socket 结构体布局变化），导致运行时崩溃或连接异常。此时需要设置 `ext_net_handle`，让 SDK 调用用户工程编译的网络实现 |
 
-**WiFi + IDF 版本一致**时，`ext_net_handle` 可设为 `nullptr`，SDK 使用内置网络栈。
+**WiFi + IDF 版本一致**时，`ext_net_handle` 可设为 `nullptr`，SDK 使用内置网络栈。当前 `create_local_config/config.json.s3` 的默认值也是：
 
-**设置方式**（在 `nertc_protocol.cc` 的引擎初始化处）：
-
-```cpp
-// 方式一：仅 4G 模块才启用（默认写法）
-if (Board::GetInstance().GetBoardType() == "ml307") {
-    engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
-}
-
-// 方式二：IDF 版本与 SDK 不一致时，WiFi 也需要启用（始终设置）
-engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
+```json
+"ext_net_handle": false
 ```
 
-> **排查建议**：若使用 WiFi 方案但出现 SDK 连接失败、崩溃在网络相关调用栈中，可优先尝试方式二，即无条件设置 `ext_net_handle`。
+**在本示例中的设置方式**（由 `config.json` 开关控制，在 `nertc_protocol.cc` 的引擎初始化处生效）：
+
+```cpp
+if (use_ext_net_handle) {
+    engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
+} else {
+    engine_config.ext_net_handle = nullptr;
+}
+```
+
+> **配置建议**：若使用 4G、ESP-Hosted，或 WiFi 方案下出现 SDK 连接失败、崩溃在网络相关调用栈中，可将 `config.json` 中的 `ext_net_handle` 改为 `true`，让 SDK 强制走应用侧编译的网络实现。
+
+#### 4.5.4 `nertc_external_osal.cc`
+
+`NeRtcExternalOsal` 是外部 OSAL 抽象层，通过 `ext_osal_handle` 向 NERtc SDK 提供线程、定时器、睡眠、时间、日志、互斥锁、条件变量等系统能力。
+
+当前示例中的 `nertc_external_osal.cc` 主要基于 ESP-IDF / FreeRTOS 适配了以下能力：
+
+- 线程创建与销毁：`xTaskCreate` / `xTaskCreatePinnedToCoreWithCaps`
+- 定时器：`esp_timer`
+- 睡眠与时间：`vTaskDelay`、`esp_timer_get_time`
+- 日志：转发到 `ESP_LOGx`
+- 同步原语：`Semaphore` 形式的 mutex / condition variable
+
+`create_local_config/config.json.s3` 默认启用了该开关：
+
+```json
+"ext_osal_handle": true
+```
+
+在本示例中的设置方式如下：
+
+```cpp
+if (use_ext_osal_handle) {
+    engine_config.ext_osal_handle = NeRtcExternalOsal::GetInstance()->GetHandle();
+} else {
+    engine_config.ext_osal_handle = nullptr;
+}
+```
+
+> **配置建议**：当前 ESP32 示例默认建议保持 `ext_osal_handle = true`。如果手动关闭，SDK 会退回内部 OSAL 路径；仅在你已经确认目标构建不依赖外部 OSAL 适配时再关闭。
 
 ### 4.6 Application 层
 
@@ -326,11 +377,11 @@ idf_component_register(SRCS ${SOURCES}
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `CONFIG_USE_CUSTOM_WAKE_WORD` | 视芯片而定 | 使用云信自定义唤醒词（Multinet 模型），需要 ESP32-S3/P4 + PSRAM |
-| `CONFIG_SR_MN_CN_MULTINET7_AC_QUANT` | y | 自定义唤醒词推荐使用 multinet7 模型，该配置在 sdkconfig.defaults.esp32s3 |
+| `CONFIG_SR_MN_CN_MULTINET7_QUANT` | y | 自定义唤醒词默认使用 `mn7_cn` 模型，该配置在 `sdkconfig.defaults.esp32s3` |
 
 ## 6. 本地配置文件（config.bin）
 
-设备从 `custom` SPIFFS 分区读取 `config.json`，在运行时加载 appkey 等参数，无需重新编译固件即可更换 appkey。
+设备从 `custom` SPIFFS 分区读取 `config.json`，在运行时加载 appkey 等参数，无需重新编译固件即可更换 appkey。以下示例以 `create_local_config/config.json.s3` 为例。
 
 ### 6.1 config.json 格式说明
 
@@ -338,11 +389,19 @@ idf_component_register(SRCS ${SOURCES}
 {
     "appkey": "your_appkey_here",
     "audio_config": {
-        "frame_size": 60
+        "frame_size": 60,
+        "afe_agc": {
+            "enabled": false,
+            "mode": 0,
+            "compression_gain_db": 9,
+            "target_level_dbfs": 3
+        }
     },
     "license_config": {
         "license": ""
-    }
+    },
+    "ext_net_handle": false,
+    "ext_osal_handle": true
 }
 ```
 
@@ -350,7 +409,15 @@ idf_component_register(SRCS ${SOURCES}
 |------|------|------|
 | `appkey` | string | **必填**，云信控制台分配的 App Key |
 | `audio_config.frame_size` | number | 音频帧时长（ms），推荐值 `20` 或 `60` |
+| `audio_config.afe_agc.enabled` | boolean | 是否开启 AFE AGC，默认 `false` |
+| `audio_config.afe_agc.mode` | number | AFE AGC 模式，当前示例默认 `0`，对应 `AFE_AGC_MODE_WEBRTC` |
+| `audio_config.afe_agc.compression_gain_db` | number | AFE AGC 压缩增益，默认 `9` |
+| `audio_config.afe_agc.target_level_dbfs` | number | AFE AGC 目标电平，默认 `3`，表示目标约为 `-3 dBFS` |
 | `license_config.license` | string | SDK 授权证书（如留空则使用服务器同步证书） |
+| `ext_net_handle` | boolean | 是否在 `nertc_init_engine` 前注入 `NeRtcExternalNetwork::GetInstance()->GetHandle()`。`config.json.s3` 默认值为 `false`；4G、ESP-Hosted、或 WiFi ABI 不兼容排查场景建议设为 `true` |
+| `ext_osal_handle` | boolean | 是否在 `nertc_init_engine` 前注入 `NeRtcExternalOsal::GetInstance()->GetHandle()`。`config.json.s3` 默认值为 `true`；当前 ESP32 示例建议保持开启 |
+
+> `audio_config.afe_agc` 主要用于使用 AFE 音频处理链路的板型做本地调参。仓库默认保持关闭；如需改善实际硬件的拾音效果，可在目标板上自行调试并重新生成、烧录 `config.bin`。
 
 ### 6.2 使用 config.py 生成并烧录 config.bin（推荐）
 
@@ -364,6 +431,23 @@ idf_component_register(SRCS ${SOURCES}
 - **ESP32-C3 及其他**：编辑 `create_local_config/config.json.c3`
 
 将 `appkey` 字段替换为从云信控制台获取的真实 App Key。
+
+如需调整音频参数或 SDK 外部适配开关，也可同时检查以下字段：
+
+- `audio_config.afe_agc.enabled`：默认 `false`
+- `audio_config.afe_agc.mode`：当前示例默认 `0`
+- `audio_config.afe_agc.compression_gain_db`：当前示例默认 `9`
+- `audio_config.afe_agc.target_level_dbfs`：当前示例默认 `3`
+
+- `ext_net_handle`：`config.json.s3` 默认是 `false`
+- `ext_osal_handle`：`config.json.s3` 默认是 `true`
+
+通常建议：
+
+- WiFi + IDF 版本一致时，保持 `ext_net_handle = false`
+- 4G、ESP-Hosted，或怀疑网络 ABI 不兼容时，改为 `ext_net_handle = true`
+- `ext_osal_handle` 保持 `true`，与当前示例中的 FreeRTOS / `esp_timer` 适配保持一致
+- `audio_config.afe_agc` 默认保持关闭；如需优化不同硬件板型的拾音表现，可在目标板上自行调参后重新烧录 `config.bin`
 
 **Step 2：生成并烧录**
 
@@ -458,8 +542,10 @@ python3 config.py -p COM6 --build --flash --blufi --target esp32-c3
 **配置步骤**：
 
 1. 在 `menuconfig` 中选择 **Wake Word Implementation Type** → `Multinet model (Custom Wake Word)`。
-2. 在 `menuconfig`中选择 **ESP Speech Recognition** → `Chinese Speech Commands Model（chinese recognition for air conditioner controller (mn7_cn_ac)）`
-3. 若assets.bin 是自定义的，由于小智提供的xiaozhi-assets-generator 网页生成工具在选择自定义唤醒模型不支持mn7_cn的，为此您需要参考我们fork出来的项目 https://github.com/netease-im/xiaozhi-assets-generator 进行代码修改[仅仅两行修改]，让assets.bin 中一定是包含mn7_cn的模型。
+2. 在 `menuconfig` 中选择 **ESP Speech Recognition** → `Chinese Speech Commands Model（general chinese recognition (mn7_cn)）`。
+3. 若 `assets.bin` 是自定义生成的，请确认其中包含 `mn7_cn` 模型。当前小智提供的 `xiaozhi-assets-generator` 网页工具不会默认选中该模型，如需生成对应资源，可参考我们 fork 的项目：https://github.com/netease-im/xiaozhi-assets-generator。
+
+> 若沿用当前 demo 默认配置与资源，通常无需额外调整唤醒词模型。
 
 > 自定义唤醒词参考文档：待完善。如有需求，请联系技术支持。
 
@@ -492,6 +578,10 @@ python3 config.py -p COM6 --blufi --target esp32-s3
 - OTA 同步返回中包含云音乐权限字段，且后台已开启该设备的云音乐访问权限。
 
 服务器通过 `updateSongList` JSON 指令下发歌单，设备收到后更新本地播放列表并开始播放。参考接入官方文档：https://doc.yunxin.163.com/emotional-ai/guide/jE5NDExNzc?platform=client，注意当前版本已经废弃了music_player_api.h和music_player_api.c 文件。
+
+**稳定性说明**：
+- 当前示例已增加连续 MP3 解码失败保护；当异常流导致连续解码失败达到阈值时，播放器会进入 `ERROR` 状态并主动停播，避免长时间卡死。
+- 当前示例已将流式播放相关线程栈提高到 `16KB`。如果你在自己的工程中裁剪或移植云音乐播放器逻辑，建议保留等价的线程栈和错误退出保护。
 
 ### 8.4 4G 模组接入（esp-ml307）
 
@@ -550,7 +640,7 @@ dependencies:
 
 #### 8.4.5 与 NERtc 的衔接
 
-使用 4G 模组时，需通过 `nertc_external_network.cc` 将 `esp-ml307` 的网络能力桥接给 NERtc SDK（详见[第 4.5.3 节](#453-nertc_external_networkcc)）。`components/esp-ml307` 中的 `NetworkInterface` 抽象基类与 `NeRtcExternalNetwork` 的外部 handle 设计一致，可直接对接。
+使用 4G 模组时，需通过 `nertc_external_network.cc` 将 `esp-ml307` 的网络能力桥接给 NERtc SDK（详见[第 4.5.3 节](#453-nertc_external_networkcc)）。`components/esp-ml307` 中的 `NetworkInterface` 抽象基类与 `NeRtcExternalNetwork` 的外部 handle 设计一致，可直接对接。对当前示例工程而言，推荐直接在 `config.json` 中将 `ext_net_handle` 设为 `true`。
 
 ```cpp
 // nertc_protocol.cc 引擎初始化处（4G 模组方案）
@@ -585,7 +675,7 @@ idf.py -DCONFIG_ESP_SPI_HOST_INTERFACE=y build flash
 
 #### 8.5.3 主控（P4）侧适配
 
-P4 侧需在工程中集成 esp-hosted host 驱动，并将其网络能力桥接给 NERtc SDK，方式与 4G 模组完全一致：
+P4 侧需在工程中集成 esp-hosted host 驱动，并将其网络能力桥接给 NERtc SDK，方式与 4G 模组完全一致。对当前示例工程而言，推荐直接在 `config.json` 中将 `ext_net_handle` 设为 `true`：
 
 ```cpp
 // nertc_protocol.cc 引擎初始化处（P4 + esp-hosted 方案）
@@ -594,7 +684,7 @@ engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
 
 `nertc_external_network.cc` 中 HTTP、TCP、UDP、MQTT 的底层实现，需替换为调用 esp-hosted host 侧提供的 socket API（esp-hosted host 驱动在 P4 上注册标准 netif，可直接使用 lwIP socket，**无需额外适配**）。
 
-> **与 4G 模组的关键区别**：4G 模组的 AT 命令接口无法直接使用 lwIP socket，因此 `esp-ml307` 需要完整实现 HTTP/TCP/UDP/MQTT；而 esp-hosted host 驱动注册了标准 netif，P4 上可直接使用 lwIP socket，`NeRtcExternalNetwork` 中的 WiFi 默认实现（即 `ext_net_handle = nullptr` 的内置路径）理论上可复用，但为确保 ABI 一致性，**建议始终显式设置 `ext_net_handle`**（参见 [第 4.5.3 节](#453-nertc_external_networkcc) 方式二）。
+> **与 4G 模组的关键区别**：4G 模组的 AT 命令接口无法直接使用 lwIP socket，因此 `esp-ml307` 需要完整实现 HTTP/TCP/UDP/MQTT；而 esp-hosted host 驱动注册了标准 netif，P4 上可直接使用 lwIP socket，`NeRtcExternalNetwork` 中的 WiFi 默认实现（即 `ext_net_handle = nullptr` 的内置路径）理论上可复用，但为确保 ABI 一致性，**建议始终显式设置 `ext_net_handle`**（参见 [第 4.5.3 节](#453-nertc_external_networkcc) 的开关说明）。
 
 #### 8.5.4 与其他方案对比
 
@@ -622,10 +712,10 @@ A：检查 `config.json` 格式是否合法（标准 JSON，无注释），以�
 A：不能。两者互斥，`CONFIG_USE_NERTC_SERVER_AEC` 和 `CONFIG_USE_DEVICE_AEC` 不能同时为 `y`。PTT 模式开启时两种 AEC 均不可用。
 
 **Q：WiFi 方案下 SDK 连接失败或崩溃在网络调用栈中？**
-A：大概率是 SDK 预编译库的 IDF 版本与用户工程不一致，导致内置网络栈 ABI 不兼容。解决方法：在引擎初始化时无条件设置外部网络 handle，让 SDK 使用应用侧编译的网络实现：
+A：大概率是 SDK 预编译库的 IDF 版本与用户工程不一致，导致内置网络栈 ABI 不兼容。解决方法：将 `config.json` 中的 `ext_net_handle` 改为 `true`，让 SDK 使用应用侧编译的网络实现：
 
-```cpp
-engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
+```json
+"ext_net_handle": true
 ```
 
 详见[第 4.5.3 节](#453-nertc_external_networkcc)。

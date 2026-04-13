@@ -363,6 +363,11 @@ void Application::ActivationTask() {
     ReadNertcConfig();
 #endif
 
+#if CONFIG_CONNECTION_TYPE_NERTC
+    if (Board::GetInstance().GetBoardType() == "ml307") {
+        audio_service_.PlaySound(Lang::Sounds::OGG_4G_CONNECTED);
+    } else
+#endif
     audio_service_.PlaySound(Lang::Sounds::OGG_CONNECTED);
 
     // Check for new firmware version
@@ -595,7 +600,9 @@ void Application::InitializeProtocol() {
         if (strcmp(type->valuestring, "tts") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
             if (strcmp(state->valuestring, "start") == 0) {
+#if CONFIG_CONNECTION_TYPE_NERTC
                 current_pedding_speaking_.store(true);
+#endif
                 if (GetDeviceState() == kDeviceStateIdle || GetDeviceState() == kDeviceStateListening){
                     audio_service_.ResetDecoder(); //这里涉及到任务投递执行，所有resetdecoder需要提前做。不然前面一两帧音频都丢失
                 }
@@ -651,11 +658,15 @@ void Application::InitializeProtocol() {
                     Schedule([this]() {
                         Reboot();
                     });
-                } else if (strcmp(command->valuestring, "sleep") == 0) {
+                } 
+#if CONFIG_CONNECTION_TYPE_NERTC
+                else if (strcmp(command->valuestring, "sleep") == 0) {
                     Schedule([this]() {
                         ai_sleep_ = true;
                     });
-                } else {
+                } 
+#endif
+                else {
                     ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
                 }
             }
@@ -840,7 +851,9 @@ void Application::HandleToggleChatEvent() {
             Schedule([this, mode]() {
                 ContinueOpenAudioChannel(mode);
             });
+#if CONFIG_CONNECTION_TYPE_NERTC
             ai_sleep_ = false;
+#endif
             return;
         }
         SetListeningMode(mode);
@@ -890,7 +903,9 @@ void Application::HandleStartListeningEvent() {
             Schedule([this]() {
                 ContinueOpenAudioChannel(kListeningModeManualStop);
             });
+#if CONFIG_CONNECTION_TYPE_NERTC
             ai_sleep_ = false;
+#endif
             return;
         }
         SetListeningMode(kListeningModeManualStop);
@@ -939,7 +954,9 @@ void Application::HandleWakeWordDetectedEvent() {
             Schedule([this, wake_word]() {
                 ContinueWakeWordInvoke(wake_word);
             });
+#if CONFIG_CONNECTION_TYPE_NERTC
             ai_sleep_ = false;
+#endif
             return;
         }
         // Channel already opened, continue directly
@@ -977,7 +994,9 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
             audio_service_.EnableWakeWordDetection(true);
             return;
         }
+#if CONFIG_CONNECTION_TYPE_NERTC
         ai_sleep_ = false;
+#endif
     }
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
@@ -1187,7 +1206,9 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             Schedule([this, wake_word]() {
                 ContinueWakeWordInvoke(wake_word);
             });
+#if CONFIG_CONNECTION_TYPE_NERTC
             ai_sleep_ = false;
+#endif
             return;
         }
         // Channel already opened, continue directly

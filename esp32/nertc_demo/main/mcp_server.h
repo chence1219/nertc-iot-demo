@@ -224,6 +224,7 @@ public:
 
     auto begin() { return properties_.begin(); }
     auto end() { return properties_.end(); }
+    bool empty() const { return properties_.empty(); }
 
     std::vector<std::string> GetRequired() const {
         std::vector<std::string> required;
@@ -257,63 +258,80 @@ class McpTool {
 private:
     std::string name_;
     std::string description_;
+    int version_ = 0;
     PropertyList properties_;
     std::function<ReturnValue(const PropertyList&)> callback_;
     bool user_only_ = false;
 
 public:
-    McpTool(const std::string& name, 
-            const std::string& description, 
-            const PropertyList& properties, 
+    McpTool(const std::string& name,
+            const std::string& description,
+            const PropertyList& properties,
             std::function<ReturnValue(const PropertyList&)> callback)
-        : name_(name), 
-        description_(description), 
-        properties_(properties), 
+        : name_(name),
+        description_(description),
+        properties_(properties),
+        callback_(callback) {}
+
+    McpTool(const std::string& name,
+            int version,
+            const PropertyList& properties,
+            std::function<ReturnValue(const PropertyList&)> callback)
+        : name_(name),
+        version_(version),
+        properties_(properties),
         callback_(callback) {}
 
     void set_user_only(bool user_only) { user_only_ = user_only; }
     inline const std::string& name() const { return name_; }
     inline const std::string& description() const { return description_; }
+    inline int version() const { return version_; }
     inline const PropertyList& properties() const { return properties_; }
     inline bool user_only() const { return user_only_; }
 
     std::string to_json() const {
-        std::vector<std::string> required = properties_.GetRequired();
-        
         cJSON *json = cJSON_CreateObject();
         cJSON_AddStringToObject(json, "name", name_.c_str());
-        cJSON_AddStringToObject(json, "description", description_.c_str());
-        
-        cJSON *input_schema = cJSON_CreateObject();
-        cJSON_AddStringToObject(input_schema, "type", "object");
-        
-        cJSON *properties = properties_.to_cjson();
-        cJSON_AddItemToObject(input_schema, "properties", properties);
-        
-        if (!required.empty()) {
-            cJSON *required_array = cJSON_CreateArray();
-            for (const auto& property : required) {
-                cJSON_AddItemToArray(required_array, cJSON_CreateString(property.c_str()));
-            }
-            cJSON_AddItemToObject(input_schema, "required", required_array);
-        }
-        
-        cJSON_AddItemToObject(json, "inputSchema", input_schema);
 
-        // Add audience annotation if the tool is user only (invisible to AI)
-        if (user_only_) {
-            cJSON *annotations = cJSON_CreateObject();
-            cJSON *audience = cJSON_CreateArray();
-            cJSON_AddItemToArray(audience, cJSON_CreateString("user"));
-            cJSON_AddItemToObject(annotations, "audience", audience);
-            cJSON_AddItemToObject(json, "annotations", annotations);
+        if (version_ > 0) {
+            // Version-only tool: only output name and version
+            cJSON_AddNumberToObject(json, "version", version_);
+        } else {
+            // Full tool: output name, description, inputSchema, annotations
+            cJSON_AddStringToObject(json, "description", description_.c_str());
+
+            std::vector<std::string> required = properties_.GetRequired();
+            cJSON *input_schema = cJSON_CreateObject();
+            cJSON_AddStringToObject(input_schema, "type", "object");
+
+            cJSON *properties = properties_.to_cjson();
+            cJSON_AddItemToObject(input_schema, "properties", properties);
+
+            if (!required.empty()) {
+                cJSON *required_array = cJSON_CreateArray();
+                for (const auto& property : required) {
+                    cJSON_AddItemToArray(required_array, cJSON_CreateString(property.c_str()));
+                }
+                cJSON_AddItemToObject(input_schema, "required", required_array);
+            }
+
+            cJSON_AddItemToObject(json, "inputSchema", input_schema);
+
+            // Add audience annotation if the tool is user only (invisible to AI)
+            if (user_only_) {
+                cJSON *annotations = cJSON_CreateObject();
+                cJSON *audience = cJSON_CreateArray();
+                cJSON_AddItemToArray(audience, cJSON_CreateString("user"));
+                cJSON_AddItemToObject(annotations, "audience", audience);
+                cJSON_AddItemToObject(json, "annotations", annotations);
+            }
         }
-        
+
         char *json_str = cJSON_PrintUnformatted(json);
         std::string result(json_str);
         cJSON_free(json_str);
         cJSON_Delete(json);
-        
+
         return result;
     }
 
@@ -370,6 +388,7 @@ public:
     void AddUserOnlyTools();
     void AddTool(McpTool* tool);
     void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
+    void AddTool(const std::string& name, int version, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);
