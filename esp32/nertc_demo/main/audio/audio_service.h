@@ -216,12 +216,14 @@ private:
 #endif
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
+    void PostProcessPlaybackPcm(std::vector<int16_t>& pcm);
     void CheckAndUpdateAudioPowerState();
 
     int opus_frame_duration_ = 60;
     int max_decode_packets_size_ = 40;
     int max_send_packets_size_ = 40;
 
+    float playback_frame_gain_ = 1.0f;
 };
 
 #endif

@@ -9,6 +9,7 @@
 #include "protocol.h"
 #include "nertc_sdk.h"
 #include "nertc_external_network.h"
+#include "nertc_external_osal.h"
 
 #define NERTC_ENABLE_CONFIG_FILE 1
 

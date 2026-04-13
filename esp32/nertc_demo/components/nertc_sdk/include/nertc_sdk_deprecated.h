@@ -13,6 +13,7 @@ typedef struct nertc_sdk_optional_config {
   bool enable_server_aec;
   bool enable_ptt_mode;
   nertc_sdk_ext_net_handle_t* ext_net_handle;  // 用户自定义的网络接口
+  nertc_sdk_ext_osal_handle_t* ext_osal_handle; // 用户自定义的系统接口
   const char* custom_config;
 } nertc_sdk_optional_config_t;
 

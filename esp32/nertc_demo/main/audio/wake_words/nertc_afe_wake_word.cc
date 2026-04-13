@@ -146,9 +146,11 @@ bool NertcAfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list
     config.user_data = this;
     std::string device_id = Board::GetInstance().GetBoardName();
     config.deviceId = device_id.c_str();
-    cJSON* config_json = NeRtcProtocol::ReadConfigJson();
+    cJSON* config_json = nullptr;
     std::string custom_config_string;
     std::string local_config_appkey_;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    config_json = NeRtcProtocol::ReadConfigJson();
     if(config_json) {
         cJSON* appkey = cJSON_GetObjectItem(config_json, "appkey");
         if (appkey && cJSON_IsString(appkey)) {
@@ -167,6 +169,12 @@ bool NertcAfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list
         config.appkey = nullptr;
         config.custom_config = nullptr;
     }
+#else
+    local_config_appkey_ = "";
+    custom_config_string = "";
+    config.appkey = local_config_appkey_.c_str();
+    config.custom_config = custom_config_string.c_str();
+#endif
     config.models_list = models_list;
     nertc_wake_word_ = nertc_wakeup_create(&config);
 #if defined(CONFIG_USE_AUDIO_CODEC_ENCODE_OPUS)
