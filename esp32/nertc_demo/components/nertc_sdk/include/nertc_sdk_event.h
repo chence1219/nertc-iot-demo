@@ -180,6 +180,7 @@ typedef struct nertc_sdk_engine_config {
   nertc_sdk_event_handle_t event_handler;     /**< 事件回调 */
   nertc_sdk_user_data_t user_data;            /**< 用户数据 */
   nertc_sdk_ext_net_handle_t* ext_net_handle; /**< 用户自定义的网络接口 */
+  nertc_sdk_ext_osal_handle_t* ext_osal_handle; /**< 用户自定义的系统接口（线程/睡眠/定时器/时间） */
   nertc_sdk_engine_feature_config_t feature_config; /**< 功能配置 */
 } nertc_sdk_engine_config_t;
 

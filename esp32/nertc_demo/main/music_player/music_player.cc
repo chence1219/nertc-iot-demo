@@ -1,4 +1,5 @@
 #include "music_player.h"
+#include "music_player_view.h"
 #include <vector>
 #include <cstring>
 #include <cmath>
@@ -103,13 +104,19 @@ void MusicPlayer::InfoCallback(int sample_rate, int channels, int bits){
 }
 
 void MusicPlayer::PlayStateCallback(music_player_state_t state){
-    std::lock_guard<std::mutex> lock(call_back_mutex_);
-    current_state_ = state;
-    ESP_LOGI("MusicPlayer", "Music player state changed: %d", state);
-    if(current_state_ == MUSIC_PLAYER_STATE_FINISHED || current_state_ == MUSIC_PLAYER_STATE_ERROR){
-        if(!CurrentPlayingLastMusic() && is_air_music_playing_){
-            PlayNextAirMusic();
-        }
+    bool should_play_next = false;
+    {
+        std::lock_guard<std::mutex> lock(call_back_mutex_);
+        current_state_ = state;
+        ESP_LOGI("MusicPlayer", "Music player state changed: %d", state);
+        should_play_next = (state == MUSIC_PLAYER_STATE_FINISHED || state == MUSIC_PLAYER_STATE_ERROR) &&
+            !CurrentPlayingLastMusic() && is_air_music_playing_;
+    }
+
+    MusicPlayerView::GetInstance().OnPlayStateChanged(state);
+
+    if (should_play_next) {
+        PlayNextAirMusic();
     }
 }
 
@@ -146,19 +153,17 @@ int MusicPlayer::Initialize(AudioCodec* codec, AudioService* audio_service, std:
         // mp3_player_init(DataOutCb, InfoCb, PlayStateCb, this);
         mp3_online_player_.Mp3OnlinePlayerInit(DataOutCb, InfoCb, PlayStateCb, this);
     }
+    MusicPlayerView::GetInstance().Initialize();
     if(!sd_card_music_path.empty())
     {
         music_list_manager_.InitLocalMusicListAuto(sd_card_music_path);
     }
     //add mcp tools
-    McpServer::GetInstance().AddTool("self.music_player.play_online_music", 
-       "[STRICT] 这是一个播放控制指令。当对话上下文中已列出带编号(0, 1, 2...)的歌曲清单，且用户给出以下反馈时必须立即调用：\n"
-        "1. 纯数字(如: '0'、'1')\n"
-        "2. 序数词(如: '第一首'、'最后一张')\n"
-        "3. 播放意图+编号(如: '播放第2个'、'听序号0')\n"
-        "【重要转换规则】：无论用户说'第一首'还是'1'，你必须将其转换为对应的 0-based 索引。例如：用户说'第一首'，传入 index=0；用户说'0'，传入 index=0。\n"
-        "【禁令牌】：若指令包含'本地'字样则不触发。",
-        PropertyList({Property("index", kPropertyTypeInteger)}), 
+    McpServer::GetInstance().AddTool("self.music_player.play_online_music",
+        1,
+        PropertyList({
+            Property("index", kPropertyTypeInteger)
+        }),
         [this](const PropertyList& properties) -> ReturnValue {
             std::string param = "index";
             ESP_LOGI("MusicPlayer", "Received play_online_music tool call");

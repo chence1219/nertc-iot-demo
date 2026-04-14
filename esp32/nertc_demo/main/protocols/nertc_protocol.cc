@@ -2,6 +2,7 @@
 #include <cstring>
 #include "nertc_protocol.h"
 #include "nertc_external_network.h"
+#include "nertc_external_osal.h"
 #include "board.h"
 #include "display.h"
 #include "system_info.h"
@@ -43,6 +44,8 @@ NeRtcProtocol::NeRtcProtocol() {
     int local_frame_duration_config = 0;
     std::string local_license_config;
     std::string custom_config_string;
+    bool use_ext_net_handle = false;
+    bool use_ext_osal_handle = false;
 #if NERTC_ENABLE_CONFIG_FILE
     if (!NeRtcProtocol::MountFileSystem()) {
         ESP_LOGE(TAG, "Failed to initialize file system");
@@ -87,6 +90,23 @@ NeRtcProtocol::NeRtcProtocol() {
                 ESP_LOGI(TAG, "local license config, size: %d", local_license_config.size());
             }
         }
+        cJSON* ext_net_handle_cfg = cJSON_GetObjectItem(config_json, "ext_net_handle");
+        if (cJSON_IsBool(ext_net_handle_cfg)) {
+            use_ext_net_handle = cJSON_IsTrue(ext_net_handle_cfg);
+            ESP_LOGI(TAG, "local config set ext_net_handle to %d", use_ext_net_handle ? 1 : 0);
+        } else if (cJSON_IsNull(ext_net_handle_cfg)) {
+            use_ext_net_handle = false;
+            ESP_LOGI(TAG, "local config set ext_net_handle to null");
+        }
+
+        cJSON* ext_osal_handle_cfg = cJSON_GetObjectItem(config_json, "ext_osal_handle");
+        if (cJSON_IsBool(ext_osal_handle_cfg)) {
+            use_ext_osal_handle = cJSON_IsTrue(ext_osal_handle_cfg);
+            ESP_LOGI(TAG, "local config set ext_osal_handle to %d", use_ext_osal_handle ? 1 : 0);
+        } else if (cJSON_IsNull(ext_osal_handle_cfg)) {
+            use_ext_osal_handle = false;
+            ESP_LOGI(TAG, "local config set ext_osal_handle to null");
+        }
     }
     else{
         ESP_LOGE(TAG, "No local config file");
@@ -95,70 +115,7 @@ NeRtcProtocol::NeRtcProtocol() {
 
     std::string device_id = Board::GetInstance().GetBoardName();
     ESP_LOGI(TAG, "Start create nertc sdk device_id:%s Free: %u minimal: %u", device_id.c_str(), heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
-#if 0
-    nertc_sdk_config_t nertc_sdk_config = { 0 };
-    nertc_sdk_config.app_key = local_config_appkey_.c_str();
-    nertc_sdk_config.device_id = device_id.c_str();
-    nertc_sdk_config.force_unsafe_mode = true;
-    //如果打开服务端aec，这3个参数会由sdk内部控制
-    nertc_sdk_config.audio_config.channels = 1;
-    nertc_sdk_config.audio_config.frame_duration = local_frame_duration_config > 0 ? local_frame_duration_config : Application::GetInstance().OpusFrameDurationMs();
-    nertc_sdk_config.audio_config.sample_rate = 16000;
-    nertc_sdk_config.audio_config.out_sample_rate = 16000; //指定下行采样率使用16k
-    nertc_sdk_config.audio_config.codec_type = NERTC_SDK_AUDIO_CODEC_TYPE_OPUS;
-    ESP_LOGI(TAG, "Start set nertc sdk handler: Free: %u minimal: %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
 
-    nertc_sdk_config.event_handler.on_error = OnError;
-    nertc_sdk_config.event_handler.on_license_expire_warning = OnLicenseExpireWarning;
-    nertc_sdk_config.event_handler.on_channel_status_changed = OnChannelStatusChanged;
-    nertc_sdk_config.event_handler.on_join = OnJoin;
-    nertc_sdk_config.event_handler.on_disconnect = OnDisconnect;
-    nertc_sdk_config.event_handler.on_user_joined = OnUserJoined;
-    nertc_sdk_config.event_handler.on_user_left = OnUserLeft;
-    nertc_sdk_config.event_handler.on_user_audio_start = OnUserAudioStart;
-    nertc_sdk_config.event_handler.on_user_audio_stop = OnUserAudioStop;
-    nertc_sdk_config.event_handler.on_asr_caption_result = OnAsrCaptionResult;
-    nertc_sdk_config.event_handler.on_ai_data = OnAiData;
-    nertc_sdk_config.event_handler.on_audio_encoded_data = OnAudioData;
-    nertc_sdk_config.event_handler.on_server_time = OnServerTime;
-
-    // optional_config
-#if CONFIG_IDF_TARGET_ESP32S3
-    nertc_sdk_config.optional_config.device_performance_level = NERTC_SDK_DEVICE_LEVEL_HIGH;
-#elif CONFIG_IDF_TARGET_ESP32C3
-    nertc_sdk_config.optional_config.device_performance_level = NERTC_SDK_DEVICE_LEVEL_LOW;
-#else
-    nertc_sdk_config.optional_config.device_performance_level = NERTC_SDK_DEVICE_LEVEL_NORMAL;
-#endif
-
-#if CONFIG_USE_NERTC_SERVER_AEC
-    nertc_sdk_config.optional_config.enable_server_aec = true;
-#else
-    nertc_sdk_config.optional_config.enable_server_aec = false;
-#endif
-
-#if CONFIG_USE_NERTC_PTT_MODE
-    nertc_sdk_config.optional_config.enable_ptt_mode = true;
-    nertc_sdk_config.optional_config.enable_server_aec = false;
-#else
-    nertc_sdk_config.optional_config.enable_ptt_mode = false;
-#endif
-
-    if (Board::GetInstance().GetBoardType() == "ml307") { //4G模组，需要外部网络IO
-        NeRtcExternalNetwork* ext_net = NeRtcExternalNetwork::GetInstance();
-        nertc_sdk_config.optional_config.ext_net_handle = ext_net->GetHandle();
-    } else {
-        nertc_sdk_config.optional_config.ext_net_handle = nullptr;
-    }
-
-    nertc_sdk_config.optional_config.custom_config = custom_config_string.c_str();
-    nertc_sdk_config.log_cfg.log_level = NERTC_SDK_LOG_INFO;
-    nertc_sdk_config.licence_cfg.license = local_license_config.empty() ? NERTC_DEFAULT_TEST_LICENSE : local_license_config.c_str();
-    nertc_sdk_config.user_data = this;
-    cJSON_Delete(config_json);
-    engine_ = nertc_create_engine(&nertc_sdk_config);
-    auto ret = nertc_init(engine_);
-#else
     // 第一步：准备创建引擎的配置
     nertc_sdk_configuration_t sdk_config = { 0 };
     nertc_sdk_configuration_init(&sdk_config);
@@ -239,11 +196,18 @@ NeRtcProtocol::NeRtcProtocol() {
     // 用户数据
     engine_config.user_data = this;
     // 外部网络接口
-    if (Board::GetInstance().GetBoardType() == "ml307") { //4G模组，需要外部网络IO
+    if (use_ext_net_handle) {
         NeRtcExternalNetwork* ext_net = NeRtcExternalNetwork::GetInstance();
         engine_config.ext_net_handle = ext_net->GetHandle();
     } else {
         engine_config.ext_net_handle = nullptr;
+    }
+    // 外部系统抽象接口（线程/睡眠/定时器/锁）
+    if (use_ext_osal_handle) {
+        NeRtcExternalOsal* ext_osal = NeRtcExternalOsal::GetInstance();
+        engine_config.ext_osal_handle = ext_osal->GetHandle();
+    } else {
+        engine_config.ext_osal_handle = nullptr;
     }
 
 #if NERTC_ENABLE_CONFIG_FILE
@@ -252,7 +216,6 @@ NeRtcProtocol::NeRtcProtocol() {
 
     // 初始化引擎
     auto ret = nertc_init_engine(engine_, &engine_config);
-#endif
     if (ret != 0) {
         ESP_LOGE(TAG, "Failed to initialize NERtc SDK, error: %d", ret);
         return;

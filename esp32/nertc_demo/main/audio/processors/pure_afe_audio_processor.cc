@@ -1,4 +1,5 @@
 #include "pure_afe_audio_processor.h"
+#include "afe_agc_config.h"
 #include <esp_log.h>
 
 #define PROCESSOR_RUNNING 0x01
@@ -48,7 +49,7 @@ void PureAfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->ns_init = true;
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = 1;
-    afe_config->agc_init = false;
+    afe_runtime_config::ApplyAgcConfig(afe_config, TAG);
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 #ifdef CONFIG_USE_DEVICE_AEC
     afe_config->aec_init = true;

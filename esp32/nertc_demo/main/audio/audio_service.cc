@@ -43,6 +43,12 @@
 
 #define TAG "AudioService"
 
+namespace {
+constexpr float kPlaybackLimiterCeiling = 0.891250938f;   // 10^(-1/20), ~ -1 dBFS
+constexpr float kPlaybackLimiterAttackBypass = 0.85f;     // below this peak, skip limiter path
+constexpr float kPlaybackFrameReleaseStep = 0.03f;        // per-frame gain recovery step
+}  // namespace
+
 AudioService::AudioService() {
     event_group_ = xEventGroupCreate();
 }
@@ -550,6 +556,7 @@ void AudioService::OpusCodecTask() {
                         resampled.resize(actual_output);
                         task->pcm = std::move(resampled);
                     }
+                    PostProcessPlaybackPcm(task->pcm);
                     lock.lock();
                     audio_playback_queue_.push_back(std::move(task));
                     audio_queue_cv_.notify_all();
@@ -621,6 +628,53 @@ void AudioService::OpusCodecTask() {
     }
 
     ESP_LOGW(TAG, "Opus codec task stopped");
+}
+
+void AudioService::PostProcessPlaybackPcm(std::vector<int16_t>& pcm) {
+    if (pcm.empty()) {
+        return;
+    }
+
+    // Safety layer (small and conservative):
+    // 1) No fixed attenuation.
+    // 2) Apply frame limiter only when peak is close to full-scale.
+    float frame_peak = 0.0f;
+    for (const auto& s : pcm) {
+        float norm = static_cast<float>(s) / 32768.0f;
+        float abs_norm = (norm >= 0.0f) ? norm : -norm;
+        if (abs_norm > frame_peak) {
+            frame_peak = abs_norm;
+        }
+    }
+
+    float target_gain = 1.0f;
+    if (frame_peak > kPlaybackLimiterCeiling) {
+        target_gain = kPlaybackLimiterCeiling / frame_peak;
+    }
+
+    // Fast attack, slow release: reduce immediately when needed, recover gradually.
+    if (target_gain < playback_frame_gain_) {
+        playback_frame_gain_ = target_gain;
+    } else {
+        float recovered = playback_frame_gain_ + kPlaybackFrameReleaseStep;
+        playback_frame_gain_ = (recovered < 1.0f) ? recovered : 1.0f;
+    }
+
+    // If this frame is already safe and current gain is back to unity, bypass processing.
+    if (frame_peak < kPlaybackLimiterAttackBypass && playback_frame_gain_ >= 0.999f) {
+        return;
+    }
+
+    const float total_gain = playback_frame_gain_;
+    for (auto& s : pcm) {
+        int32_t v = static_cast<int32_t>(static_cast<float>(s) * total_gain);
+        if (v > 32767) {
+            v = 32767;
+        } else if (v < -32768) {
+            v = -32768;
+        }
+        s = static_cast<int16_t>(v);
+    }
 }
 
 void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
