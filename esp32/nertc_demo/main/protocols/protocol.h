@@ -2,6 +2,7 @@
 #define PROTOCOL_H
 
 #include <cJSON.h>
+#include <cstdint>
 #include <string>
 #include <functional>
 #include <chrono>
@@ -12,6 +13,9 @@ struct AudioStreamPacket {
     int frame_duration = 0;
     uint32_t timestamp = 0;
     std::vector<uint8_t> payload;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    int64_t nertc_playback_start_timestamp_ms = 0;
+#endif
 };
 
 struct BinaryProtocol2 {

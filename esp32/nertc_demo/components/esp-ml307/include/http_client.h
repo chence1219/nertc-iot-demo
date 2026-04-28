@@ -162,6 +162,8 @@ private:
     
     // 新增：重置请求状态（用于连接复用）
     void ResetRequestState();
+    std::string GetRequestHostHeaderValue() const;
+    static std::string ExtractHostName(const std::string& host_header);
 };
 
 #endif

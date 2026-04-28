@@ -44,10 +44,7 @@ void McpServer::AddCommonTools() {
     // Custom tools must be added in the board's InitializeTools function.
 
     AddTool("self.get_device_status",
-        "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
-        "Use this tool for: \n"
-        "1. Answering questions about current condition (e.g. what is the current volume of the audio speaker?)\n"
-        "2. As the first step to control the device (e.g. turn up / down the volume of the audio speaker, etc.)",
+        1,
         PropertyList(),
         [&board](const PropertyList& properties) -> ReturnValue {
             return board.GetDeviceStatusJson();
@@ -55,7 +52,7 @@ void McpServer::AddCommonTools() {
 
 #if CONFIG_CONNECTION_TYPE_NERTC
     AddTool("self.good_bye",
-        "用户有明确离开意图的时候，比如说“再见”、“我要休息啦”、“拜拜啦”、“goodbye”、“byebye”等等，调用它。",
+        1,
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
             auto& app = Application::GetInstance();
@@ -64,21 +61,21 @@ void McpServer::AddCommonTools() {
         });
 #endif
 
-    AddTool("self.audio_speaker.set_volume", 
-        "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
+    AddTool("self.audio_speaker.set_volume",
+        1,
         PropertyList({
             Property("volume", kPropertyTypeInteger, 0, 100)
-        }), 
+        }),
         [&board](const PropertyList& properties) -> ReturnValue {
             auto codec = board.GetAudioCodec();
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
         });
-    
+
     auto backlight = board.GetBacklight();
     if (backlight) {
         AddTool("self.screen.set_brightness",
-            "Set the brightness of the screen.",
+            1,
             PropertyList({
                 Property("brightness", kPropertyTypeInteger, 0, 100)
             }),
@@ -93,7 +90,7 @@ void McpServer::AddCommonTools() {
     auto display = board.GetDisplay();
     if (display && display->GetTheme() != nullptr) {
         AddTool("self.screen.set_theme",
-            "Set the theme of the screen. The theme can be `light` or `dark`.",
+            1,
             PropertyList({
                 Property("theme", kPropertyTypeString)
             }),
@@ -170,8 +167,8 @@ void McpServer::AddCommonTools() {
 #endif
 
 #if CONFIG_CONNECTION_TYPE_NERTC
-    AddTool("self.cancel_alarm_ringing",
-        "识别用户取消闹钟铃声的意图，无论当前是否有闹钟都要触发该工具。",
+    AddTool("self.cancel_alarm",
+        1,
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
             auto& instance = Application::GetInstance();

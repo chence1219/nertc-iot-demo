@@ -121,14 +121,13 @@ std::string HttpClient::BuildHttpRequest() {
     request << method_ << " " << path_ << " HTTP/1.1\r\n";
 
     // Host 头
-    request << "Host: " << host_;
-    if ((protocol_ == "http" && port_ != 80) || (protocol_ == "https" && port_ != 443)) {
-        request << ":" << port_;
-    }
-    request << "\r\n";
+    request << "Host: " << GetRequestHostHeaderValue() << "\r\n";
 
     // 用户自定义头部（使用原始key输出）
     for (const auto& [lower_key, header_entry] : headers_) {
+        if (lower_key == "host") {
+            continue;
+        }
         request << header_entry.original_key << ": " << header_entry.value << "\r\n";
     }
 
@@ -204,6 +203,10 @@ bool HttpClient::Open(const std::string& method, const std::string& url) {
             tcp_ = network_->CreateSsl(connect_id_);
         } else {
             tcp_ = network_->CreateTcp(connect_id_);
+        }
+
+        if (protocol_ == "https") {
+            tcp_->SetTlsServerName(ExtractHostName(GetRequestHostHeaderValue()));
         }
 
         // 设置 TCP 数据接收回调
@@ -813,4 +816,32 @@ void HttpClient::ResetRequestState() {
                          EC801E_HTTP_EVENT_BODY_RECEIVED |
                          EC801E_HTTP_EVENT_ERROR |
                          EC801E_HTTP_EVENT_COMPLETE);
+}
+
+std::string HttpClient::GetRequestHostHeaderValue() const {
+    auto it = headers_.find("host");
+    if (it != headers_.end() && !it->second.value.empty()) {
+        return it->second.value;
+    }
+
+    std::string host_header = host_;
+    if ((protocol_ == "http" && port_ != 80) || (protocol_ == "https" && port_ != 443)) {
+        host_header += ":" + std::to_string(port_);
+    }
+    return host_header;
+}
+
+std::string HttpClient::ExtractHostName(const std::string& host_header) {
+    auto begin = host_header.find_first_not_of(" \t");
+    if (begin == std::string::npos) {
+        return "";
+    }
+
+    auto end = host_header.find_last_not_of(" \t");
+    std::string host = host_header.substr(begin, end - begin + 1);
+    auto colon_pos = host.find(':');
+    if (colon_pos != std::string::npos) {
+        host = host.substr(0, colon_pos);
+    }
+    return host;
 }

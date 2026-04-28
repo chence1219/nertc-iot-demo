@@ -33,6 +33,7 @@ bool EspSsl::Connect(const std::string& host, int port) {
 
     esp_tls_cfg_t cfg = {};
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.common_name = tls_server_name_.empty() ? host.c_str() : tls_server_name_.c_str();
 
     int ret = esp_tls_conn_new_sync(host.c_str(), host.length(), port, &cfg, tls_client_);
     if (ret != 1) {
@@ -146,4 +147,8 @@ void EspSsl::ReceiveTask() {
 
 int EspSsl::GetLastError() {
     return last_error_;
+}
+
+void EspSsl::SetTlsServerName(const std::string& server_name) {
+    tls_server_name_ = server_name;
 }

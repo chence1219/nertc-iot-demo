@@ -196,7 +196,12 @@ NeRtcProtocol::NeRtcProtocol() {
     // 用户数据
     engine_config.user_data = this;
     // 外部网络接口
-    if (use_ext_net_handle) {
+    const bool force_ext_net_handle_for_ml307 = Board::GetInstance().GetBoardType() == "ml307";
+    const bool effective_use_ext_net_handle = use_ext_net_handle || force_ext_net_handle_for_ml307;
+    if (force_ext_net_handle_for_ml307 && !use_ext_net_handle) {
+        ESP_LOGW(TAG, "ml307 board forces ext_net_handle on even though local config disables it");
+    }
+    if (effective_use_ext_net_handle) {
         NeRtcExternalNetwork* ext_net = NeRtcExternalNetwork::GetInstance();
         engine_config.ext_net_handle = ext_net->GetHandle();
     } else {
@@ -1009,6 +1014,7 @@ void NeRtcProtocol::OnAudioData(const nertc_sdk_callback_context_t* ctx, uint64_
         packet->sample_rate = instance->recommended_audio_config_.out_sample_rate;
         packet->frame_duration = instance->server_frame_duration_;
         packet->timestamp = encoded_frame->encoded_timestamp;
+        packet->nertc_playback_start_timestamp_ms = encoded_frame->timestamp_ms;
         packet->payload = std::move(payload_vector);
 
         instance->on_incoming_audio_(std::move(packet));

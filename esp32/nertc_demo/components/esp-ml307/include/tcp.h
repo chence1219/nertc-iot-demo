@@ -11,6 +11,7 @@ public:
     virtual bool Connect(const std::string& host, int port) = 0;
     virtual void Disconnect() = 0;
     virtual int Send(const std::string& data) = 0;
+    virtual void SetTlsServerName(const std::string& server_name) {}
 
     virtual void OnStream(std::function<void(const std::string& data)> callback) {
         stream_callback_ = callback;

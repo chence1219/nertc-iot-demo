@@ -374,7 +374,7 @@ void Application::ActivationTask() {
     CheckNewVersion();
 
     int interrupteMode = ota_->GetOtaAgentInterruptMode();
-    aec_mode_ = interrupteMode == 0 ? kAecOff : kAecOnDeviceSide;
+    aec_mode_ = interrupteMode == 0 ? kAecOff : aec_mode_; //默认还是用 menuconfig 里面的配置
     ESP_LOGI(TAG, "OTA agent interrupt mode: %d, set AEC mode to %d", interrupteMode, aec_mode_);
 #ifdef CONFIG_USE_MUSIC_PLAYER
     auto& board = Board::GetInstance();
@@ -450,9 +450,26 @@ void Application::CheckAssetsVersion() {
 }
 
 void Application::CheckNewVersion() {
-    const int MAX_RETRY = 10;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    // NERTC OTA now probes multiple HTTP candidates in one round, so keep the
+    // outer retry policy tighter to avoid blocking startup for too long.
+    const int max_retry = 4;
+    const int initial_retry_delay = 5;
+    const int max_retry_delay = 20;
+#else
+    const int max_retry = 10;
+    const int initial_retry_delay = 10;
+#endif
     int retry_count = 0;
-    int retry_delay = 10; // Initial retry delay in seconds
+    int retry_delay = initial_retry_delay;
+
+#if CONFIG_CONNECTION_TYPE_NERTC
+    ESP_LOGI(TAG,
+             "NERTC OTA retry policy: max_retry=%d, initial_delay=%ds, max_delay=%ds",
+             max_retry,
+             initial_retry_delay,
+             max_retry_delay);
+#endif
 
     auto& board = Board::GetInstance();
     while (true) {
@@ -462,7 +479,7 @@ void Application::CheckNewVersion() {
         esp_err_t err = ota_->CheckVersion();
         if (err != ESP_OK) {
             retry_count++;
-            if (retry_count >= MAX_RETRY) {
+            if (retry_count >= max_retry) {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
                 return;
             }
@@ -473,18 +490,27 @@ void Application::CheckNewVersion() {
             snprintf(buffer, sizeof(buffer), Lang::Strings::CHECK_NEW_VERSION_FAILED, retry_delay, error_message);
             Alert(Lang::Strings::ERROR, buffer, "cloud_slash", Lang::Sounds::OGG_EXCLAMATION);
 
-            ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
+            ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, max_retry);
             for (int i = 0; i < retry_delay; i++) {
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 if (GetDeviceState() == kDeviceStateIdle) {
                     break;
                 }
             }
+#if CONFIG_CONNECTION_TYPE_NERTC
+            if (retry_delay < max_retry_delay) {
+                retry_delay *= 2;
+                if (retry_delay > max_retry_delay) {
+                    retry_delay = max_retry_delay;
+                }
+            }
+#else
             retry_delay *= 2; // Double the retry delay
+#endif
             continue;
         }
         retry_count = 0;
-        retry_delay = 10; // Reset retry delay
+        retry_delay = initial_retry_delay;
 
         if (ota_->HasNewVersion()) {
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {

@@ -8,6 +8,7 @@ public:
     EspNetwork();
     ~EspNetwork();
 
+    bool SupportsSystemDnsLookup() const override;
     std::unique_ptr<Http> CreateHttp(int connect_id = -1) override;
     std::unique_ptr<Tcp> CreateTcp(int connect_id = -1) override;
     std::unique_ptr<Tcp> CreateSsl(int connect_id = -1) override;

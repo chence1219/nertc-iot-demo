@@ -18,6 +18,7 @@ public:
     bool Connect(const std::string& host, int port) override;
     void Disconnect() override;
     int Send(const std::string& data) override;
+    void SetTlsServerName(const std::string& server_name) override;
 
     int GetLastError() override;
 
@@ -26,6 +27,7 @@ private:
     EventGroupHandle_t event_group_ = nullptr;
     TaskHandle_t receive_task_handle_ = nullptr;
     int last_error_ = 0;
+    std::string tls_server_name_;
 
     void ReceiveTask();
 };
