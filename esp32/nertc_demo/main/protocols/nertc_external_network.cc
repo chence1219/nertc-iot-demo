@@ -115,6 +115,7 @@ bool NeRtcExternalNetwork::OpenHttp(http_handle handle, const char* method, cons
         
     Http* http = static_cast<Http*>(handle);
     http->SetContent(std::string(content, length));
+    ESP_LOGI(TAG, "Open external HTTP connection. method: %s url: %s", method ? method : "", url ? url : "");
     if (!http->Open(method, url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection. url: %s", url);    
         return false;

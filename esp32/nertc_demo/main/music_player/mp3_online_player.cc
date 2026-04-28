@@ -428,6 +428,10 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
     {
         ESP_LOGE(TAG, "Invalid URL format: %s", music_url.c_str());
         is_downloading_ = false;
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.notify_all();
+        }
         return;
     }
 
@@ -446,6 +450,10 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
     {
         ESP_LOGE(TAG, "Failed to connect to music stream URL");
         is_downloading_ = false;
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.notify_all();
+        }
         return;
     }
 
@@ -455,6 +463,10 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
         ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
         http->Close();
         is_downloading_ = false;
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.notify_all();
+        }
         return;
     }
 
@@ -623,7 +635,14 @@ void Mp3OnlinePlayer::PlayAudioStream()
     {
         std::unique_lock<std::mutex> lock(buffer_mutex_);
         buffer_cv_.wait(lock, [this]
-                        { return buffer_size_ >= MIN_BUFFER_SIZE || (!is_downloading_ && !audio_buffer_.empty()); });
+                        { return buffer_size_ >= MIN_BUFFER_SIZE || !is_downloading_; });
+
+        if (audio_buffer_.empty() && !is_downloading_)
+        {
+            ESP_LOGW(TAG, "Download stopped before enough audio was buffered");
+            is_playing_ = false;
+            return;
+        }
     }
 
     ESP_LOGI(TAG, "Starting playback with buffer size: %d", buffer_size_);

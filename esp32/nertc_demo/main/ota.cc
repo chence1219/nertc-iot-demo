@@ -3,9 +3,11 @@
 #include "settings.h"
 #include "assets/lang_config.h"
 #include "application.h"
+#include <at_modem.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/event_groups.h>
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_partition.h>
@@ -18,12 +20,574 @@
 #include <esp_hmac.h>
 #endif
 
+#include <arpa/inet.h>
+#include <netdb.h>
+
 #include <cstring>
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
+#include <mutex>
 
 #define TAG "Ota"
+
+namespace {
+
+#if CONFIG_CONNECTION_TYPE_NERTC
+
+#define NERTC_HTTP_FALLBACK_FORCE_TEST_FLOW 0
+
+struct OtaHttpCandidate {
+    std::string base_url;
+    std::string host_header;
+    const char* name = "";
+};
+
+struct OtaHttpResult {
+    esp_err_t err = ESP_FAIL;
+    int status_code = -1;
+    std::string body;
+    std::string final_url;
+    std::string candidate_name;
+    int candidate_index = -1;
+};
+
+struct OtaEndpointSet {
+    const char* primary_url;
+    const char* backup_url1;
+    const char* backup_host1;
+    const char* backup_url2;
+    const char* backup_host2;
+};
+
+constexpr int kOtaRequestTimeoutMs = 15000;
+constexpr char kOtaProdPrimaryUrl[] = "https://nrtc.netease.im/v1/ota";
+constexpr char kOtaProdLogicalHost[] = "nrtc.netease.im";
+constexpr char kOtaProdBackupUrl1[] = "https://47.83.229.207/v1/ota";
+constexpr char kOtaProdBackupUrl2[] = "https://1.95.20.137/v1/ota";
+constexpr char kOtaTestPrimaryUrl[] = "http://webtest.netease.im/v1/ota";
+constexpr char kOtaTestLogicalHost[] = "webtest.netease.im";
+constexpr char kOtaTestBackupUrl1[] = "http://1.95.20.157/v1/ota";
+constexpr char kOtaTestBackupUrl2[] = "http://1.95.20.158/v1/ota";
+
+// Production fallback order is pinned to the service-confirmed sequence:
+// domain -> overseas IP -> domestic IP.
+constexpr OtaEndpointSet kOtaProdEndpoints = {
+    kOtaProdPrimaryUrl,
+    kOtaProdBackupUrl1,
+    kOtaProdLogicalHost,
+    kOtaProdBackupUrl2,
+    kOtaProdLogicalHost,
+};
+
+constexpr OtaEndpointSet kOtaTestEndpoints = {
+    kOtaTestPrimaryUrl,
+    kOtaTestBackupUrl1,
+    kOtaTestLogicalHost,
+    kOtaTestBackupUrl2,
+    kOtaTestLogicalHost,
+};
+
+void AppendOtaCandidate(std::vector<OtaHttpCandidate>& candidates,
+                        const std::string& base_url,
+                        const std::string& host_header,
+                        const char* name) {
+    if (base_url.empty()) {
+        return;
+    }
+
+    auto duplicate = std::find_if(candidates.begin(), candidates.end(),
+                                  [&](const OtaHttpCandidate& candidate) {
+                                      return candidate.base_url == base_url &&
+                                             candidate.host_header == host_header;
+                                  });
+    if (duplicate != candidates.end()) {
+        return;
+    }
+
+    candidates.push_back({base_url, host_header, name});
+}
+
+std::vector<OtaHttpCandidate> GetOtaBaseUrlCandidates() {
+    Settings settings("wifi", false);
+    std::vector<OtaHttpCandidate> candidates;
+    auto& application = Application::GetInstance();
+    if (application.GetNertcTestMode()) {
+        AppendOtaCandidate(candidates, kOtaTestEndpoints.primary_url, "", "primary");
+        AppendOtaCandidate(candidates, kOtaTestEndpoints.backup_url1, kOtaTestEndpoints.backup_host1, "backup1");
+        AppendOtaCandidate(candidates, kOtaTestEndpoints.backup_url2, kOtaTestEndpoints.backup_host2, "backup2");
+        return candidates;
+    }
+    AppendOtaCandidate(candidates, settings.GetString("ota_url", kOtaProdEndpoints.primary_url), "", "primary");
+    AppendOtaCandidate(candidates, kOtaProdEndpoints.backup_url1, kOtaProdEndpoints.backup_host1, "backup1");
+    AppendOtaCandidate(candidates, kOtaProdEndpoints.backup_url2, kOtaProdEndpoints.backup_host2, "backup2");
+    return candidates;
+}
+
+std::string BuildOtaRequestUrl(const std::string& base_url, const char* suffix) {
+    std::string url = base_url;
+    if (url.empty()) {
+        return url;
+    }
+
+    if (suffix && suffix[0] != '\0') {
+        auto query_pos = url.find('?');
+        std::string path = query_pos == std::string::npos ? url : url.substr(0, query_pos);
+        std::string query = query_pos == std::string::npos ? "" : url.substr(query_pos);
+        if (!path.empty() && path.back() != '/') {
+            path += '/';
+        }
+        path += (suffix[0] == '/') ? (suffix + 1) : suffix;
+        url = path + query;
+    }
+
+    auto& application = Application::GetInstance();
+    if (!application.GetAppkey().empty()) {
+        url += (url.find('?') == std::string::npos ? "?appkey=" : "&appkey=") + application.GetAppkey();
+    }
+    return url;
+}
+
+std::string ExtractHostFromUrl(const std::string& url) {
+    auto scheme_pos = url.find("://");
+    if (scheme_pos == std::string::npos) {
+        return "";
+    }
+
+    auto host_begin = scheme_pos + 3;
+    auto host_end = url.find_first_of("/?", host_begin);
+    std::string host_port = host_end == std::string::npos ? url.substr(host_begin)
+                                                          : url.substr(host_begin, host_end - host_begin);
+    auto colon_pos = host_port.find(':');
+    return colon_pos == std::string::npos ? host_port : host_port.substr(0, colon_pos);
+}
+
+bool IsIpv4Address(const std::string& host) {
+    sockaddr_in addr = {};
+    return !host.empty() && inet_pton(AF_INET, host.c_str(), &addr.sin_addr) == 1;
+}
+
+void AppendUniqueResolvedIp(std::vector<std::string>& resolved_ips, const std::string& ip) {
+    if (ip.empty() ||
+        std::find(resolved_ips.begin(), resolved_ips.end(), ip) != resolved_ips.end()) {
+        return;
+    }
+    resolved_ips.push_back(ip);
+}
+
+enum class Ml307DnsQueryStatus {
+    kUnsupported,
+    kSendFailed,
+    kTimeout,
+    kNoIpv4Address,
+    kResolved,
+};
+
+struct Ml307DnsQueryResult {
+    Ml307DnsQueryStatus status = Ml307DnsQueryStatus::kUnsupported;
+    std::vector<std::string> resolved_ips;
+};
+
+Ml307DnsQueryResult ResolveDomainViaMl307At(const std::string& host) {
+    constexpr EventBits_t kDnsLookupDoneBit = BIT0;
+    constexpr int kDnsCommandTimeoutMs = 3000;
+    constexpr int kDnsWaitTimeoutMs = 2000;
+
+    auto* network = Board::GetInstance().GetNetwork();
+    if (network == nullptr) {
+        return {};
+    }
+
+    auto* modem = static_cast<AtModem*>(network);
+    auto at_uart = modem->GetAtUart();
+    if (at_uart == nullptr) {
+        return {};
+    }
+
+    Ml307DnsQueryResult result;
+    EventGroupHandle_t event_group = xEventGroupCreate();
+    if (event_group == nullptr) {
+        return {};
+    }
+
+    std::mutex result_mutex;
+    auto callback_it = at_uart->RegisterUrcCallback(
+        [&](const std::string& command, const std::vector<AtArgumentValue>& arguments) {
+            if (command != "MDNSGIP" || arguments.empty()) {
+                return;
+            }
+
+            size_t ip_begin = 0;
+            bool host_matched = false;
+            for (size_t index = 0; index < arguments.size(); ++index) {
+                if (arguments[index].type != AtArgumentValue::Type::String) {
+                    continue;
+                }
+                if (arguments[index].string_value == host) {
+                    host_matched = true;
+                    ip_begin = index + 1;
+                    break;
+                }
+            }
+
+            if (!host_matched &&
+                arguments[0].type == AtArgumentValue::Type::String &&
+                !arguments[0].string_value.empty() &&
+                arguments[0].string_value != host) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(result_mutex);
+            result.resolved_ips.clear();
+            for (size_t index = ip_begin; index < arguments.size(); ++index) {
+                if (arguments[index].type != AtArgumentValue::Type::String) {
+                    continue;
+                }
+                if (!IsIpv4Address(arguments[index].string_value)) {
+                    continue;
+                }
+                AppendUniqueResolvedIp(result.resolved_ips, arguments[index].string_value);
+            }
+            result.status = result.resolved_ips.empty() ? Ml307DnsQueryStatus::kNoIpv4Address
+                                                        : Ml307DnsQueryStatus::kResolved;
+            xEventGroupSetBits(event_group, kDnsLookupDoneBit);
+        });
+
+    const std::string command = "AT+MDNSGIP=\"" + host + "\"";
+    if (!at_uart->SendCommand(command, kDnsCommandTimeoutMs)) {
+        at_uart->UnregisterUrcCallback(callback_it);
+        vEventGroupDelete(event_group);
+        result.status = Ml307DnsQueryStatus::kSendFailed;
+        return result;
+    }
+
+    EventBits_t bits = xEventGroupWaitBits(event_group,
+                                           kDnsLookupDoneBit,
+                                           pdTRUE,
+                                           pdFALSE,
+                                           pdMS_TO_TICKS(kDnsWaitTimeoutMs));
+    at_uart->UnregisterUrcCallback(callback_it);
+    vEventGroupDelete(event_group);
+
+    if ((bits & kDnsLookupDoneBit) == 0) {
+        result.status = Ml307DnsQueryStatus::kTimeout;
+    }
+    return result;
+}
+
+#if NERTC_HTTP_FALLBACK_FORCE_TEST_FLOW
+bool ShouldForceFallbackAfterDomainProbe(const OtaHttpCandidate& candidate,
+                                         const std::string& final_url) {
+    if (!candidate.host_header.empty()) {
+        return false;
+    }
+
+    auto host = ExtractHostFromUrl(final_url);
+    return !host.empty() && !IsIpv4Address(host);
+}
+#endif
+
+void LogResolvedIpForDomainRequest(const char* request_name,
+                                   const char* candidate_name,
+                                   const std::string& final_url) {
+    if (request_name == nullptr || std::strcmp(request_name, "ota_check_version") != 0) {
+        return;
+    }
+
+    auto host = ExtractHostFromUrl(final_url);
+    if (host.empty() || IsIpv4Address(host)) {
+        return;
+    }
+
+    auto& board = Board::GetInstance();
+    if (board.GetBoardType() == "ml307") {
+        auto result = ResolveDomainViaMl307At(host);
+        switch (result.status) {
+            case Ml307DnsQueryStatus::kResolved: {
+                std::ostringstream oss;
+                for (size_t i = 0; i < result.resolved_ips.size(); ++i) {
+                    if (i > 0) {
+                        oss << ", ";
+                    }
+                    oss << result.resolved_ips[i];
+                }
+                ESP_LOGI(TAG,
+                         "[%s] %s pre-request domain dns resolved, host=%s, ips=%s",
+                         candidate_name ? candidate_name : "",
+                         request_name,
+                         host.c_str(),
+                         oss.str().c_str());
+                return;
+            }
+            case Ml307DnsQueryStatus::kSendFailed:
+                ESP_LOGW(TAG,
+                         "[%s] %s pre-request domain dns lookup failed, host=%s, rc=-1",
+                         candidate_name ? candidate_name : "",
+                         request_name,
+                         host.c_str());
+                return;
+            case Ml307DnsQueryStatus::kTimeout:
+                ESP_LOGW(TAG,
+                         "[%s] %s pre-request domain dns lookup timeout, host=%s",
+                         candidate_name ? candidate_name : "",
+                         request_name,
+                         host.c_str());
+                return;
+            case Ml307DnsQueryStatus::kNoIpv4Address:
+                ESP_LOGW(TAG,
+                         "[%s] %s pre-request domain dns lookup got no ipv4 address, host=%s",
+                         candidate_name ? candidate_name : "",
+                         request_name,
+                         host.c_str());
+                return;
+            case Ml307DnsQueryStatus::kUnsupported:
+                return;
+        }
+    }
+
+    auto* network = board.GetNetwork();
+    if (network == nullptr || !network->SupportsSystemDnsLookup()) {
+        return;
+    }
+
+    addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    addrinfo* address_list = nullptr;
+    int rc = getaddrinfo(host.c_str(), nullptr, &hints, &address_list);
+    if (rc != 0 || address_list == nullptr) {
+        ESP_LOGW(TAG,
+                 "[%s] %s pre-request domain dns lookup failed, host=%s, rc=%d",
+                 candidate_name ? candidate_name : "",
+                 request_name,
+                 host.c_str(),
+                 rc);
+        return;
+    }
+
+    std::vector<std::string> resolved_ips;
+    for (addrinfo* cursor = address_list; cursor != nullptr; cursor = cursor->ai_next) {
+        if (cursor->ai_family != AF_INET || cursor->ai_addr == nullptr) {
+            continue;
+        }
+
+        char ip[INET_ADDRSTRLEN] = {};
+        auto* ipv4_addr = reinterpret_cast<sockaddr_in*>(cursor->ai_addr);
+        if (inet_ntop(AF_INET, &ipv4_addr->sin_addr, ip, sizeof(ip)) == nullptr) {
+            continue;
+        }
+
+        if (std::find(resolved_ips.begin(), resolved_ips.end(), ip) == resolved_ips.end()) {
+            resolved_ips.emplace_back(ip);
+        }
+    }
+    freeaddrinfo(address_list);
+
+    if (resolved_ips.empty()) {
+        ESP_LOGW(TAG,
+                 "[%s] %s pre-request domain dns lookup got no ipv4 address, host=%s",
+                 candidate_name ? candidate_name : "",
+                 request_name,
+                 host.c_str());
+        return;
+    }
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < resolved_ips.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << resolved_ips[i];
+    }
+
+    ESP_LOGI(TAG,
+             "[%s] %s pre-request domain dns resolved, host=%s, ips=%s",
+             candidate_name ? candidate_name : "",
+             request_name,
+             host.c_str(),
+             oss.str().c_str());
+}
+
+bool LooksLikeHtmlResponse(const std::string& body) {
+    auto first = std::find_if_not(body.begin(), body.end(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    });
+    if (first == body.end()) {
+        return false;
+    }
+
+    if (*first == '<') {
+        return true;
+    }
+
+    std::string lower_body = body;
+    std::transform(lower_body.begin(), lower_body.end(), lower_body.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return lower_body.find("<html") != std::string::npos ||
+           lower_body.find("<!doctype html") != std::string::npos;
+}
+
+bool HasStructuredServiceErrorCode(const std::string& body) {
+    if (body.empty() || LooksLikeHtmlResponse(body)) {
+        return false;
+    }
+
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        return false;
+    }
+
+    cJSON* code = cJSON_GetObjectItem(root, "code");
+    bool has_code = cJSON_IsObject(root) && cJSON_IsNumber(code);
+    cJSON_Delete(root);
+    return has_code;
+}
+
+bool IsValidJsonResponse(const std::string& body) {
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        return false;
+    }
+    cJSON_Delete(root);
+    return true;
+}
+
+bool ShouldFallbackToNextCandidate(const OtaHttpResult& result) {
+    if (result.status_code <= 0) {
+        return true;
+    }
+
+    if (result.status_code >= 300 && result.status_code < 400) {
+        return true;
+    }
+
+    if (result.status_code >= 400 && result.status_code < 500) {
+        return !HasStructuredServiceErrorCode(result.body);
+    }
+
+    if (result.status_code >= 500) {
+        return true;
+    }
+
+    if (result.status_code != 200) {
+        return false;
+    }
+
+    if (result.body.empty()) {
+        return true;
+    }
+
+    if (LooksLikeHtmlResponse(result.body)) {
+        return true;
+    }
+
+    return !IsValidJsonResponse(result.body);
+}
+
+OtaHttpResult SendOtaRequest(
+    const char* request_name,
+    const std::vector<OtaHttpCandidate>& candidates,
+    const char* method,
+    const std::string& content,
+    const char* suffix,
+    std::function<std::unique_ptr<Http>()> setup_http) {
+    for (size_t index = 0; index < candidates.size(); ++index) {
+        const auto& candidate = candidates[index];
+        OtaHttpResult result;
+        result.candidate_index = static_cast<int>(index);
+        result.candidate_name = candidate.name ? candidate.name : "";
+        result.final_url = BuildOtaRequestUrl(candidate.base_url, suffix);
+        if (result.final_url.size() < 10) {
+            result.err = ESP_ERR_INVALID_ARG;
+            return result;
+        }
+
+        auto http = setup_http();
+        if (!http) {
+            result.err = ESP_FAIL;
+            return result;
+        }
+
+        http->SetTimeout(kOtaRequestTimeoutMs);
+        if (!candidate.host_header.empty()) {
+            http->SetHeader("Host", candidate.host_header);
+        }
+        http->SetContent(std::string(content));
+        LogResolvedIpForDomainRequest(request_name, result.candidate_name.c_str(), result.final_url);
+        ESP_LOGI(TAG, "[%s][%d/%d] %s url: %s",
+                 result.candidate_name.c_str(),
+                 static_cast<int>(index + 1),
+                 static_cast<int>(candidates.size()),
+                 request_name,
+                 result.final_url.c_str());
+        if (!http->Open(method, result.final_url)) {
+            int last_error = http->GetLastError();
+            result.err = last_error == ESP_OK ? ESP_FAIL : static_cast<esp_err_t>(last_error);
+            ESP_LOGE(TAG,
+                     "[%s][%d/%d] Failed to open HTTP connection, code=0x%x",
+                     result.candidate_name.c_str(),
+                     static_cast<int>(index + 1),
+                     static_cast<int>(candidates.size()),
+                     last_error);
+        } else {
+            result.status_code = http->GetStatusCode();
+            if (result.status_code > 0) {
+                result.body = http->ReadAll();
+            }
+            http->Close();
+            result.err = result.status_code == 200 ? ESP_OK : static_cast<esp_err_t>(result.status_code);
+        }
+
+#if NERTC_HTTP_FALLBACK_FORCE_TEST_FLOW
+        bool force_fallback_after_domain_probe =
+            ShouldForceFallbackAfterDomainProbe(candidate, result.final_url);
+        if (force_fallback_after_domain_probe) {
+            if (!result.body.empty()) {
+                ESP_LOGI(TAG,
+                         "[%s][%d/%d] %s domain probe response: %s",
+                         result.candidate_name.c_str(),
+                         static_cast<int>(index + 1),
+                         static_cast<int>(candidates.size()),
+                         request_name,
+                         result.body.c_str());
+            }
+            ESP_LOGW(TAG,
+                     "[%s][%d/%d] %s domain probe finished, forcing fallback for test, err=0x%x status=%d body_len=%d",
+                     result.candidate_name.c_str(),
+                     static_cast<int>(index + 1),
+                     static_cast<int>(candidates.size()),
+                     request_name,
+                     result.err,
+                     result.status_code,
+                     static_cast<int>(result.body.size()));
+        }
+#else
+        bool force_fallback_after_domain_probe = false;
+#endif
+
+        bool should_fallback =
+            force_fallback_after_domain_probe || ShouldFallbackToNextCandidate(result);
+        if (!should_fallback || index + 1 >= candidates.size()) {
+            return result;
+        }
+
+        ESP_LOGW(TAG,
+                 "[%s][%d/%d] fallback to next OTA candidate, status=%d",
+                 result.candidate_name.c_str(),
+                 static_cast<int>(index + 1),
+                 static_cast<int>(candidates.size()),
+                 result.status_code);
+    }
+
+    return OtaHttpResult{};
+}
+
+#endif
+
+}  // namespace
 
 
 Ota::Ota() {
@@ -45,20 +609,20 @@ Ota::~Ota() {
 }
 
 std::string Ota::GetCheckVersionUrl() {
+#if CONFIG_CONNECTION_TYPE_NERTC
+    auto candidates = GetOtaBaseUrlCandidates();
+    if (candidates.empty()) {
+        return "";
+    }
+    return BuildOtaRequestUrl(candidates.front().base_url, nullptr);
+#else
     Settings settings("wifi", false);
     std::string url = settings.GetString("ota_url");
     if (url.empty()) {
         url = CONFIG_OTA_URL;
     }
-#if CONFIG_CONNECTION_TYPE_NERTC
-    auto& application = Application::GetInstance();
-    if (application.GetNertcTestMode())
-        url = "http://webtest.netease.im/v1/ota";
-
-    if (!application.GetAppkey().empty())
-        url += "?appkey=" + application.GetAppkey();
-#endif
     return url;
+#endif
 }
 
 std::unique_ptr<Http> Ota::SetupHttp() {
@@ -97,28 +661,44 @@ esp_err_t Ota::CheckVersion() {
         return ESP_ERR_INVALID_ARG;
     }
 
-    auto http = SetupHttp();
-
     std::string data = board.GetSystemInfoJson();
     ESP_LOGI(TAG, "ota url: %s deviceId:%s\n", url.c_str(), board.GetBoardName().c_str());
     std::string method = data.length() > 0 ? "POST" : "GET";
+#if CONFIG_CONNECTION_TYPE_NERTC
+    auto candidates = GetOtaBaseUrlCandidates();
+    auto result = SendOtaRequest("ota_check_version", candidates, method.c_str(), data, nullptr, [this]() {
+        return SetupHttp();
+    });
+
+    auto status_code = result.status_code;
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "Failed to check version, status code: %d", status_code);
+        return result.err;
+    }
+
+    data = std::move(result.body);
+    ESP_LOGI(TAG, "ota data: %s\n", data.c_str());
+#else
+    auto http = SetupHttp();
     http->SetContent(std::move(data));
 
     if (!http->Open(method, url)) {
         int last_error = http->GetLastError();
         ESP_LOGE(TAG, "Failed to open HTTP connection, code=0x%x", last_error);
-        return last_error;
+        return static_cast<esp_err_t>(last_error);
     }
 
     auto status_code = http->GetStatusCode();
     if (status_code != 200) {
         ESP_LOGE(TAG, "Failed to check version, status code: %d", status_code);
-        return status_code;
+        http->Close();
+        return static_cast<esp_err_t>(status_code);
     }
 
     data = http->ReadAll();
     ESP_LOGI(TAG, "ota data: %s\n", data.c_str());
     http->Close();
+#endif
 
     // Response: { "firmware": { "version": "1.0.0", "url": "http://" } }
     // Parse the JSON response and check if the version is newer
@@ -518,6 +1098,21 @@ esp_err_t Ota::Activate() {
         return ESP_FAIL;
     }
 
+    std::string data = GetActivationPayload();
+#if CONFIG_CONNECTION_TYPE_NERTC
+    auto candidates = GetOtaBaseUrlCandidates();
+    auto result = SendOtaRequest("ota_activate", candidates, "POST", data, "activate", [this]() {
+        return SetupHttp();
+    });
+    auto status_code = result.status_code;
+    if (status_code == 202) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "Failed to activate, code: %d, body: %s", status_code, result.body.c_str());
+        return ESP_FAIL;
+    }
+#else
     std::string url = GetCheckVersionUrl();
     if (url.back() != '/') {
         url += "/activate";
@@ -526,23 +1121,25 @@ esp_err_t Ota::Activate() {
     }
 
     auto http = SetupHttp();
-
-    std::string data = GetActivationPayload();
     http->SetContent(std::move(data));
 
     if (!http->Open("POST", url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
         return ESP_FAIL;
     }
-    
+
     auto status_code = http->GetStatusCode();
     if (status_code == 202) {
+        http->Close();
         return ESP_ERR_TIMEOUT;
     }
     if (status_code != 200) {
         ESP_LOGE(TAG, "Failed to activate, code: %d, body: %s", status_code, http->ReadAll().c_str());
+        http->Close();
         return ESP_FAIL;
     }
+    http->Close();
+#endif
 
     ESP_LOGI(TAG, "Activation successful");
     return ESP_OK;

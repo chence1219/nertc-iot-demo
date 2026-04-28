@@ -16,6 +16,10 @@ EspNetwork::~EspNetwork() {
 
 }
 
+bool EspNetwork::SupportsSystemDnsLookup() const {
+    return true;
+}
+
 std::unique_ptr<Http> EspNetwork::CreateHttp(int connect_id) {
     return std::make_unique<HttpClient>(this, connect_id);
 }

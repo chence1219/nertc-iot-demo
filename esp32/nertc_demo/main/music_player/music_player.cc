@@ -207,18 +207,16 @@ int MusicPlayer::Initialize(AudioCodec* codec, AudioService* audio_service, std:
             });
 #endif
     McpServer::GetInstance().AddTool("self.music_player.stop_music",
-        "Stop playing music "
-        "当用户想要停止播放音乐时，可以调用此工具。", 
-        PropertyList(), 
+        1,
+        PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI("MusicPlayer", "Received stop_music tool call");
             this->StopAirPlay();
             return R"({"operator":"success","message":"Music stopped"})";
         });
-    McpServer::GetInstance().AddTool("self.music_player.next_music", 
-        "Play next music "
-        "当用户想听下一首音乐时，可以调用此工具",
-        PropertyList(), 
+    McpServer::GetInstance().AddTool("self.music_player.play_next",
+        1,
+        PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI("MusicPlayer", "Received next_music tool call");
             if(this->PlayNextAirMusic()){
@@ -227,10 +225,9 @@ int MusicPlayer::Initialize(AudioCodec* codec, AudioService* audio_service, std:
             }
             return R"({"operator":"failed","message":"Playing next music"})";
         });
-    McpServer::GetInstance().AddTool("self.music_player.previous_music", 
-        "Play previous music "
-        "当用户想听上一首音乐时，可以调用此工具", 
-        PropertyList(), 
+    McpServer::GetInstance().AddTool("self.music_player.play_previous",
+        1,
+        PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI("MusicPlayer", "Received previous_music tool call");
             if(this->PlayPreviousAirMusic()){

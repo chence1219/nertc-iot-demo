@@ -11,6 +11,7 @@
 class NetworkInterface {
 public:
     virtual ~NetworkInterface() = default;
+    virtual bool SupportsSystemDnsLookup() const { return false; }
 
     // 连接创建接口（纯虚函数，由子类实现）
     virtual std::unique_ptr<Http> CreateHttp(int connect_id = -1) = 0;

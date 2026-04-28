@@ -69,18 +69,19 @@
 #ifndef ESP_OPUS_BITRATE_AUTO
 #define ESP_OPUS_BITRATE_AUTO 0
 #endif
-#define AS_OPUS_ENC_CONFIG() {                                                                                    \
-        .sample_rate        = ESP_AUDIO_SAMPLE_RATE_16K,                                                          \
-        .channel            = ESP_AUDIO_MONO,                                                                     \
-        .bits_per_sample    = ESP_AUDIO_BIT16,                                                                    \
-        .bitrate            = ESP_OPUS_BITRATE_AUTO,                                                              \
-        .frame_duration     = (esp_opus_enc_frame_duration_t)AS_OPUS_GET_FRAME_DRU_ENUM(OPUS_FRAME_DURATION_MS),  \
-        .application_mode   = ESP_OPUS_ENC_APPLICATION_AUDIO,                                                     \
-        .complexity         = 0,                                                                                  \
-        .enable_fec         = false,                                                                              \
-        .enable_dtx         = true,                                                                               \
-        .enable_vbr         = true,                                                                               \
+#define AS_OPUS_ENC_CONFIG_BY_DURATION(_frame_duration_ms) {                                                     \
+        .sample_rate        = ESP_AUDIO_SAMPLE_RATE_16K,                                                         \
+        .channel            = ESP_AUDIO_MONO,                                                                    \
+        .bits_per_sample    = ESP_AUDIO_BIT16,                                                                   \
+        .bitrate            = ESP_OPUS_BITRATE_AUTO,                                                             \
+        .frame_duration     = (esp_opus_enc_frame_duration_t)AS_OPUS_GET_FRAME_DRU_ENUM(_frame_duration_ms),    \
+        .application_mode   = ESP_OPUS_ENC_APPLICATION_AUDIO,                                                    \
+        .complexity         = 0,                                                                                 \
+        .enable_fec         = false,                                                                             \
+        .enable_dtx         = true,                                                                              \
+        .enable_vbr         = true,                                                                              \
     }
+#define AS_OPUS_ENC_CONFIG() AS_OPUS_ENC_CONFIG_BY_DURATION(OPUS_FRAME_DURATION_MS)
 
 struct AudioServiceCallbacks {
     std::function<void(void)> on_send_queue_available;
@@ -99,7 +100,10 @@ enum AudioTaskType {
 struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
-    uint32_t timestamp;
+    uint32_t timestamp = 0;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    int64_t nertc_playback_start_timestamp_ms = 0;
+#endif
 };
 
 struct DebugStatistics {

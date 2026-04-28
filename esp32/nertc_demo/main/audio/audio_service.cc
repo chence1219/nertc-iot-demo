@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include <esp_log.h>
 #include <cstring>
+#include <limits>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)        \
     (esp_ae_rate_cvt_cfg_t)                                  \
@@ -109,14 +110,14 @@ void AudioService::Initialize(AudioCodec* codec) {
     codec_->Start();
 
     /* Setup the audio codec */
-    esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(codec->output_sample_rate(), OPUS_FRAME_DURATION_MS);
+    esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(codec->output_sample_rate(), opus_frame_duration());
     auto ret = esp_opus_dec_open(&opus_dec_cfg, sizeof(esp_opus_dec_cfg_t), &opus_decoder_);
     if (opus_decoder_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create audio decoder, error code: %d", ret);
     } else {
         decoder_sample_rate_ = codec->output_sample_rate();
-        decoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
-        decoder_frame_size_ = decoder_sample_rate_ / 1000 * OPUS_FRAME_DURATION_MS;
+        decoder_duration_ms_ = opus_frame_duration();
+        decoder_frame_size_ = decoder_sample_rate_ / 1000 * opus_frame_duration();
     }
 #ifdef CONFIG_USE_AUDIO_CODEC_ENCODE_OPUS
 #if defined (CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32P4)
@@ -131,13 +132,13 @@ void AudioService::Initialize(AudioCodec* codec) {
     }   
 #endif
 #else
-    esp_opus_enc_config_t opus_enc_cfg = AS_OPUS_ENC_CONFIG();
+    esp_opus_enc_config_t opus_enc_cfg = AS_OPUS_ENC_CONFIG_BY_DURATION(opus_frame_duration());
     ret = esp_opus_enc_open(&opus_enc_cfg, sizeof(esp_opus_enc_config_t), &opus_encoder_);
     if (opus_encoder_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create audio encoder, error code: %d", ret);
     } else {
         encoder_sample_rate_ = 16000;
-        encoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
+        encoder_duration_ms_ = opus_frame_duration();
         esp_opus_enc_get_frame_size(opus_encoder_, &encoder_frame_size_, &encoder_outbuf_size_);
         encoder_frame_size_ = encoder_frame_size_ / sizeof(int16_t);
     }
@@ -424,13 +425,13 @@ void AudioService::AudioInputTask() {
         if (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) {
 #ifdef CONFIG_USE_AUDIO_CODEC_ENCODE_OPUS
             std::vector<uint8_t> data;
-            int samples = OPUS_FRAME_DURATION_MS * 16000 / 1000;
+            int samples = opus_frame_duration() * 16000 / 1000;
             if (samples > 0) {
                 if (ReadAudioData(data, 16000, samples)) {
                     if (audio_send_queue_.size() < max_send_packets_size_) {
                         auto packet = std::make_unique<AudioStreamPacket>();
                         packet->payload = std::move(data);
-                        packet->frame_duration = OPUS_FRAME_DURATION_MS;
+                        packet->frame_duration = opus_frame_duration();
                         packet->sample_rate = 16000;
                         {
                             std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -482,6 +483,18 @@ void AudioService::AudioOutputTask() {
         }
 
         codec_->OutputData(task->pcm);
+#if CONFIG_CONNECTION_TYPE_NERTC
+        if (task->nertc_playback_start_timestamp_ms > 0) {
+            const int64_t now_ms = esp_timer_get_time() / 1000;
+            if (now_ms >= task->nertc_playback_start_timestamp_ms) {
+                const int64_t latency_ms64 = now_ms - task->nertc_playback_start_timestamp_ms;
+                const int latency_ms = latency_ms64 > std::numeric_limits<int>::max()
+                                           ? std::numeric_limits<int>::max()
+                                           : static_cast<int>(latency_ms64);
+                ESP_LOGI(TAG, "AI playback local latency: %d ms", latency_ms);
+            }
+        }
+#endif
         auto uxNow = xEventGroupGetBits(event_group_);
         if(uxNow & AS_EVENT_AUDIO_PROCESSOR_RUNNING)
         {
@@ -525,6 +538,9 @@ void AudioService::OpusCodecTask() {
             auto task = std::make_unique<AudioTask>();
             task->type = kAudioTaskTypeDecodeToPlaybackQueue;
             task->timestamp = packet->timestamp;
+#if CONFIG_CONNECTION_TYPE_NERTC
+            task->nertc_playback_start_timestamp_ms = packet->nertc_playback_start_timestamp_ms;
+#endif
 
             SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
             if (opus_decoder_ != nullptr && packet->payload.size() > 0) {
