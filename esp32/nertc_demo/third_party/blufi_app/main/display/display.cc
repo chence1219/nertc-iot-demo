@@ -49,12 +49,38 @@ void Display::SetChatMessage(const char* role, const char* content) {
     ESP_LOGW(TAG, "     %s", content);
 }
 
+void Display::SetBgImage(const lv_image_dsc_t*, bool) {
+}
+
 void Display::SetTheme(Theme* theme) {
     current_theme_ = theme;
     Settings settings("display", true);
     settings.SetString("theme", theme->name());
 }
 
+void Display::SetTheme(const std::string&) {
+}
+
 void Display::SetPowerSaveMode(bool on) {
     ESP_LOGW(TAG, "SetPowerSaveMode: %d", on);
+}
+
+void Display::SetTitleText(const std::string& text) {
+    ESP_LOGW(TAG, "SetTitleText: %s", text.c_str());
+}
+
+void Display::SetStatusProfile(const std::string& profile) {
+    status_profile_ = profile;
+}
+
+void Display::SetStatusText(const std::string& text) {
+    ESP_LOGW(TAG, "SetStatusText: %s%s", status_profile_.c_str(), text.c_str());
+}
+
+void Display::SetVersionProfile(const std::string& profile) {
+    version_profile_ = profile;
+}
+
+void Display::SetVersionText(const std::string& version) {
+    ESP_LOGW(TAG, "SetVersionText: %s%s", version_profile_.c_str(), version.c_str());
 }

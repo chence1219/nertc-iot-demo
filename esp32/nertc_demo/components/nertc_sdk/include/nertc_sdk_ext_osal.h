@@ -24,6 +24,8 @@ typedef nertc_ext_thread_handle_t (*nertc_ext_thread_create_func)(const char* na
                                                                   void* user_data);
 typedef void (*nertc_ext_thread_destroy_func)(nertc_ext_thread_handle_t handle);
 typedef bool (*nertc_ext_thread_is_current_func)(nertc_ext_thread_handle_t handle);
+typedef void (*nertc_ext_thread_wait_func)(nertc_ext_thread_handle_t handle, uint32_t timeout_ms);
+typedef void (*nertc_ext_thread_notify_func)(nertc_ext_thread_handle_t handle);
 
 typedef nertc_ext_timer_handle_t (*nertc_ext_timer_create_func)(const char* name,
                                                                 int interval_ms,
@@ -54,6 +56,8 @@ typedef struct {
   nertc_ext_thread_create_func create_thread;
   nertc_ext_thread_destroy_func destroy_thread;
   nertc_ext_thread_is_current_func thread_is_current;
+  nertc_ext_thread_wait_func thread_wait;
+  nertc_ext_thread_notify_func thread_notify;
 
   nertc_ext_timer_create_func create_timer;
   nertc_ext_timer_start_func start_timer;

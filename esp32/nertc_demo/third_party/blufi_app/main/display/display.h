@@ -35,10 +35,17 @@ public:
     virtual void LockEmotion(bool lock);
     virtual bool IsEmotionLocked(bool check);
     virtual void SetChatMessage(const char* role, const char* content);
+    virtual void SetBgImage(const lv_image_dsc_t* img_dsc, bool scale = false);
     virtual void SetTheme(Theme* theme);
+    virtual void SetTheme(const std::string& theme_name);
     virtual Theme* GetTheme() { return current_theme_; }
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
+    virtual void SetTitleText(const std::string& text);
+    virtual void SetStatusProfile(const std::string& profile);
+    virtual void SetStatusText(const std::string& text);
+    virtual void SetVersionProfile(const std::string& profile);
+    virtual void SetVersionText(const std::string& version);
 
     inline int width() const { return width_; }
     inline int height() const { return height_; }
@@ -51,6 +58,8 @@ protected:
     int height_ = 0;
 
     Theme* current_theme_ = nullptr;
+    std::string status_profile_;
+    std::string version_profile_;
 
     friend class DisplayLockGuard;
 };

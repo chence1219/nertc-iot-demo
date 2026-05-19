@@ -125,7 +125,6 @@ choice BOARD_TYPE
     config BOARD_TYPE_BREAD_COMPACT_WIFI
         bool "Bread Compact WiFi (面包板)"
         depends on IDF_TARGET_ESP32S3
-        select USE_NERTC_SERVER_AEC
     config BOARD_TYPE_BREAD_COMPACT_WIFI_LCD
         bool "Bread Compact WiFi + LCD (面包板)"
         depends on IDF_TARGET_ESP32S3
@@ -135,7 +134,6 @@ choice BOARD_TYPE
     config BOARD_TYPE_BREAD_COMPACT_ML307
         bool "Bread Compact ML307/EC801E (面包板 4G)"
         depends on IDF_TARGET_ESP32S3
-        select USE_NERTC_SERVER_AEC
     config BOARD_TYPE_BREAD_COMPACT_NT26
         bool "Bread Compact NT26 (面包板 4G)"
         depends on IDF_TARGET_ESP32S3
@@ -154,7 +152,6 @@ choice BOARD_TYPE
     config BOARD_TYPE_XMINI_C3
         bool "Xmini C3"
         depends on IDF_TARGET_ESP32C3
-        select USE_NERTC_SERVER_AEC
     config BOARD_TYPE_ESP_KORVO2_V3
         bool "Espressif Korvo2 V3"
         depends on IDF_TARGET_ESP32S3
@@ -164,7 +161,6 @@ choice BOARD_TYPE
     config BOARD_TYPE_ESP_SPARKBOT
         bool "Espressif SparkBot"
         depends on IDF_TARGET_ESP32S3
-        select USE_NERTC_SERVER_AEC
     config BOARD_TYPE_ESP_SENSAIRSHUTTLE
         bool "Espressif ESP-SensairShuttle"
         depends on IDF_TARGET_ESP32C5
@@ -439,7 +435,6 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_XINGZHI_CUBE_1_54TFT_ML307
         bool "无名科技星智1.54(ML307)"
-        select USE_NERTC_SERVER_AEC
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_XINGZHI_METAL_1_54_WIFI
         bool "无名科技星智1.54 METAL(wifi)"
@@ -449,7 +444,6 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_DOIT_S3_AIBOX
         bool "四博智联AI陪伴盒子"
-        select USE_NERTC_SERVER_AEC
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_MIXGO_NOVA
         bool "元控·青春"
@@ -501,7 +495,6 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_DOIT_AI_SPEAKER
         bool "Doit-AI-SPEAKER"
-#        select USE_NERTC_SERVER_AEC
     config BOARD_TYPE_DOIT_AI_02_KIT_LCD
         bool "Doit-AI-02-KIT-LCD"
         depends on IDF_TARGET_ESP32C3
@@ -748,13 +741,6 @@ config USE_NERTC_PTT_MODE
     default n
     help
         启用按键对讲模式
-
-config USE_NERTC_SERVER_AEC
-    bool "Enable NERTC Server-Side AEC"
-    default n
-    depends on !USE_NERTC_PTT_MODE && !BOARD_TYPE_DOIT_ESP32S3_EYE_6824 && !BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2 && !BOARD_TYPE_ZUOWEI_GEN5
-    help
-        启用nertc服务器端 AEC
 
 config DEBUG_RUNTIME_STATS
     bool "Enable RunTimeStats print"

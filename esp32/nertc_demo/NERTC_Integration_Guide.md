@@ -2,9 +2,9 @@
 
 本文档面向在 **xiaozhi-esp32** 项目基础上集成网易云信 NERtc IoT SDK 的开发者，说明如何将 NERtc 能力引入现有工程。
 
-> **SDK 版本**：1.2.5
-> **文档更新时间**：2026-04-13
-> **ESP-IDF 版本**：release-v5.4 / release-v5.5（兼容，见注意事项）
+> **SDK 版本**：1.2.7
+> **文档更新时间**：2026-05-15
+> **ESP-IDF 版本**：release-v5.5（兼容，见注意事项）
 > **Demo 工程路径**：`demo/esp32/`
 
 ---
@@ -282,7 +282,7 @@ if (use_ext_osal_handle) {
 
 #### 4.6.3 `application_nertc.cc`
 
-云信功能在 Application 中的具体实现文件。包含 NERtc 协议初始化、设备信息上报、OTA 同步时的云信扩展逻辑等，与 `application.cc` 解耦，便于维护。
+云信功能在 Application 中的具体实现文件。包含 NERtc 协议初始化、设备信息上报、OTA 同步时的云信扩展逻辑等，与 `application.cc` 解耦，便于维护。若启用 lite 模式，还需要在协议初始化前使用 OTA 返回的 `mqtt` 参数完成相关初始化，供设备直连 AI 服务。
 
 使用内置唤醒词或不使用唤醒词时，无需修改此文件。
 
@@ -339,8 +339,8 @@ idf_component_register(SRCS ${SOURCES}
 ### 4.11 main/ota.cc
 
 云信 OTA 扩展：
-- **`Ota::GetCheckVersionUrl()`**：当 `CONFIG_CONNECTION_TYPE_NERTC` 开启时，使用云信的 OTA 服务地址（`https://nrtc.netease.im/v1/ota`）替换默认地址。
-- **OTA 返回解析**：从 OTA 响应中解析 `agent` 字段，用于更新智能体配置。
+- **`Ota::GetCheckVersionUrl()`**：当 `CONFIG_CONNECTION_TYPE_NERTC` 开启时，正式服 OTA primary 优先使用 `CONFIG_OTA_URL`；仅当该配置为空时，才回退到源码内默认地址 `https://nrtc.netease.im/v1/ota`。正式服 IP fallback 的 URL 与 `Host` 仍使用本地固定配置。
+- **OTA 返回解析**：从 OTA 响应中解析 `agent` 字段，用于更新智能体配置；同时解析 `mqtt` 字段并写入本地 Settings，供后续协议初始化和 lite 模式直连 AI 服务使用。
 - **`Ota::Upgrade()`**：使用 `GetNextSafePartition()` 替代原生的 `esp_ota_get_next_update_partition()`，确保在有 `blufi` 分区的情况下 OTA 写入正确的目标分区。
 
 ### 4.12 分区表文件
@@ -358,19 +358,20 @@ idf_component_register(SRCS ${SOURCES}
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `CONFIG_CONNECTION_TYPE_NERTC` | `y` | **NERtc 能力总开关**，开启后编译所有 NERtc 相关代码 |
-| `CONFIG_OTA_URL` | `https://nrtc.netease.im/v1/ota` | OTA 检查地址，集成云信后默认指向云信 OTA 服务 |
+| `CONFIG_OTA_URL` | `https://nrtc.netease.im/v1/ota` | OTA 检查地址，NERTC 正式服 OTA primary 优先使用该配置；为空时才回退到源码内默认云信 OTA 地址 |
 
 ### 5.2 音频模式
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `CONFIG_USE_NERTC_SERVER_AEC` | `n` | 开启云信服务器端 AEC（回声消除），与本地设备 AEC 互斥，与 PTT 模式互斥 |
 | `CONFIG_USE_NERTC_PTT_MODE` | `n` | 开启按键对讲模式（PTT），按住说话松开停止，与 Server AEC 互斥 |
 
+> `server_aec` 已从 `menuconfig` 移至 `config.bin` 中的 `audio_config.server_aec` 字段配置。
+>
 > 三种 AEC 模式说明：
-> - **服务器 AEC**（`CONFIG_USE_NERTC_SERVER_AEC`）：推送 PCM 帧，服务端处理回声，需同时推送参考帧。
+> - **服务器 AEC**（`audio_config.server_aec = true`）：推送 PCM 帧，服务端处理回声，需同时推送参考帧；与 PTT 模式互斥。
 > - **本地设备 AEC**（`CONFIG_USE_DEVICE_AEC`）：设备本地处理，推送 OPUS 编码帧。
-> - **无 AEC**（两者均关闭）：推送 OPUS 编码帧，无自动打断功能。
+> - **无 AEC**（`audio_config.server_aec = false` 且本地设备 AEC 关闭）：推送 OPUS 编码帧，无自动打断功能。
 
 ### 5.3 唤醒词
 
@@ -395,13 +396,15 @@ idf_component_register(SRCS ${SOURCES}
             "mode": 0,
             "compression_gain_db": 9,
             "target_level_dbfs": 3
-        }
+        },
+        "server_aec": false
     },
     "license_config": {
         "license": ""
     },
     "ext_net_handle": false,
-    "ext_osal_handle": true
+    "ext_osal_handle": true,
+    "lite_mode": true
 }
 ```
 
@@ -413,11 +416,15 @@ idf_component_register(SRCS ${SOURCES}
 | `audio_config.afe_agc.mode` | number | AFE AGC 模式，当前示例默认 `0`，对应 `AFE_AGC_MODE_WEBRTC` |
 | `audio_config.afe_agc.compression_gain_db` | number | AFE AGC 压缩增益，默认 `9` |
 | `audio_config.afe_agc.target_level_dbfs` | number | AFE AGC 目标电平，默认 `3`，表示目标约为 `-3 dBFS` |
+| `audio_config.server_aec` | boolean | 是否开启云信服务器端 AEC。该配置已从 `menuconfig` 移至 `config.bin`，默认 `false` |
 | `license_config.license` | string | SDK 授权证书（如留空则使用服务器同步证书） |
 | `ext_net_handle` | boolean | 是否在 `nertc_init_engine` 前注入 `NeRtcExternalNetwork::GetInstance()->GetHandle()`。`config.json.s3` 默认值为 `false`；4G、ESP-Hosted、或 WiFi ABI 不兼容排查场景建议设为 `true` |
 | `ext_osal_handle` | boolean | 是否在 `nertc_init_engine` 前注入 `NeRtcExternalOsal::GetInstance()->GetHandle()`。`config.json.s3` 默认值为 `true`；当前 ESP32 示例建议保持开启 |
+| `lite_mode` | boolean | 是否开启 lite 模式。开启后设备不走 RTC 入会流程，而是基于 OTA 返回的 MQTT 参数直连 AI 服务，默认 `true` |
 
 > `audio_config.afe_agc` 主要用于使用 AFE 音频处理链路的板型做本地调参。仓库默认保持关闭；如需改善实际硬件的拾音效果，可在目标板上自行调试并重新生成、烧录 `config.bin`。
+>
+> 当 `lite_mode = true` 时，设备不走传统 RTC 入会流程，而是使用 OTA 返回的 MQTT 连接参数建立信令通道，再根据 AI 服务下发的信息建立 RTP 音频链路。
 
 ### 6.2 使用 config.py 生成并烧录 config.bin（推荐）
 
@@ -438,9 +445,11 @@ idf_component_register(SRCS ${SOURCES}
 - `audio_config.afe_agc.mode`：当前示例默认 `0`
 - `audio_config.afe_agc.compression_gain_db`：当前示例默认 `9`
 - `audio_config.afe_agc.target_level_dbfs`：当前示例默认 `3`
+- `audio_config.server_aec`：默认 `false`
 
 - `ext_net_handle`：`config.json.s3` 默认是 `false`
 - `ext_osal_handle`：`config.json.s3` 默认是 `true`
+- `lite_mode`：默认 `false`
 
 通常建议：
 
@@ -448,6 +457,8 @@ idf_component_register(SRCS ${SOURCES}
 - 4G、ESP-Hosted，或怀疑网络 ABI 不兼容时，改为 `ext_net_handle = true`
 - `ext_osal_handle` 保持 `true`，与当前示例中的 FreeRTOS / `esp_timer` 适配保持一致
 - `audio_config.afe_agc` 默认保持关闭；如需优化不同硬件板型的拾音表现，可在目标板上自行调参后重新烧录 `config.bin`
+- 如需使用云信服务器端 AEC，请将 `audio_config.server_aec` 设为 `true`
+- 如需使用 lite 直连 AI 服务，请将 `lite_mode` 设为 `true`，并确保 OTA 返回中包含可用的 `mqtt` 参数
 
 **Step 2：生成并烧录**
 

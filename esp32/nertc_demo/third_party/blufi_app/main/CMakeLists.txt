@@ -36,7 +36,10 @@ set(INCLUDE_DIRS_LIST
 )
 
 # 根据板子类型添加对应的源文件和头文件目录
-if(CONFIG_BOARD_TYPE_ZHENGCHEN_QUDOU)
+if(CONFIG_BOARD_TYPE_GENERIC_SAFE)
+    list(APPEND SOURCES "boards/generic_safe/generic_safe_board.cc")
+    list(APPEND INCLUDE_DIRS_LIST "boards/generic_safe")
+elseif(CONFIG_BOARD_TYPE_ZHENGCHEN_QUDOU)
     list(APPEND SOURCES "boards/zhengchen_qudou/qudou_board.cc")
     list(APPEND INCLUDE_DIRS_LIST "boards/zhengchen_qudou")
 elseif(CONFIG_BOARD_TYPE_ZUOWEI)

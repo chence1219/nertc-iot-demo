@@ -71,16 +71,6 @@ constexpr char kOtaTestLogicalHost[] = "webtest.netease.im";
 constexpr char kOtaTestBackupUrl1[] = "http://1.95.20.157/v1/ota";
 constexpr char kOtaTestBackupUrl2[] = "http://1.95.20.158/v1/ota";
 
-// Production fallback order is pinned to the service-confirmed sequence:
-// domain -> overseas IP -> domestic IP.
-constexpr OtaEndpointSet kOtaProdEndpoints = {
-    kOtaProdPrimaryUrl,
-    kOtaProdBackupUrl1,
-    kOtaProdLogicalHost,
-    kOtaProdBackupUrl2,
-    kOtaProdLogicalHost,
-};
-
 constexpr OtaEndpointSet kOtaTestEndpoints = {
     kOtaTestPrimaryUrl,
     kOtaTestBackupUrl1,
@@ -109,8 +99,19 @@ void AppendOtaCandidate(std::vector<OtaHttpCandidate>& candidates,
     candidates.push_back({base_url, host_header, name});
 }
 
+std::string GetConfiguredOtaUrl() {
+    std::string url = CONFIG_OTA_URL;
+    return url.empty() ? std::string(kOtaProdPrimaryUrl) : url;
+}
+
+void AppendOtaProdCandidates(std::vector<OtaHttpCandidate>& candidates) {
+    std::string primary_url = GetConfiguredOtaUrl();
+    AppendOtaCandidate(candidates, primary_url, "", "primary");
+    AppendOtaCandidate(candidates, kOtaProdBackupUrl1, kOtaProdLogicalHost, "backup1");
+    AppendOtaCandidate(candidates, kOtaProdBackupUrl2, kOtaProdLogicalHost, "backup2");
+}
+
 std::vector<OtaHttpCandidate> GetOtaBaseUrlCandidates() {
-    Settings settings("wifi", false);
     std::vector<OtaHttpCandidate> candidates;
     auto& application = Application::GetInstance();
     if (application.GetNertcTestMode()) {
@@ -119,9 +120,7 @@ std::vector<OtaHttpCandidate> GetOtaBaseUrlCandidates() {
         AppendOtaCandidate(candidates, kOtaTestEndpoints.backup_url2, kOtaTestEndpoints.backup_host2, "backup2");
         return candidates;
     }
-    AppendOtaCandidate(candidates, settings.GetString("ota_url", kOtaProdEndpoints.primary_url), "", "primary");
-    AppendOtaCandidate(candidates, kOtaProdEndpoints.backup_url1, kOtaProdEndpoints.backup_host1, "backup1");
-    AppendOtaCandidate(candidates, kOtaProdEndpoints.backup_url2, kOtaProdEndpoints.backup_host2, "backup2");
+    AppendOtaProdCandidates(candidates);
     return candidates;
 }
 
@@ -517,12 +516,14 @@ OtaHttpResult SendOtaRequest(
         }
         http->SetContent(std::string(content));
         LogResolvedIpForDomainRequest(request_name, result.candidate_name.c_str(), result.final_url);
-        ESP_LOGI(TAG, "[%s][%d/%d] %s url: %s",
+        const char* host_header = candidate.host_header.empty() ? "(url host)" : candidate.host_header.c_str();
+        ESP_LOGI(TAG, "[%s][%d/%d] %s url: %s, host_header: %s",
                  result.candidate_name.c_str(),
                  static_cast<int>(index + 1),
                  static_cast<int>(candidates.size()),
                  request_name,
-                 result.final_url.c_str());
+                 result.final_url.c_str(),
+                 host_header);
         if (!http->Open(method, result.final_url)) {
             int last_error = http->GetLastError();
             result.err = last_error == ESP_OK ? ESP_FAIL : static_cast<esp_err_t>(last_error);
@@ -712,6 +713,8 @@ esp_err_t Ota::CheckVersion() {
 
     has_activation_code_ = false;
     has_activation_challenge_ = false;
+    has_device_sdk_config_ = false;
+    device_sdk_config_.clear();
     cJSON *activation = cJSON_GetObjectItem(root, "activation");
     if (cJSON_IsObject(activation)) {
         cJSON* message = cJSON_GetObjectItem(activation, "message");
@@ -850,6 +853,20 @@ esp_err_t Ota::CheckVersion() {
             if (cJSON_IsBool(support_play_in_4g)){
                 support_air_music_in_4G = support_play_in_4g->valueint;
             }
+        }
+        cJSON *device_sdk_config = cJSON_GetObjectItem(agent, "device_sdk_config");
+        has_device_sdk_config_ = cJSON_IsObject(device_sdk_config);
+        if (has_device_sdk_config_) {
+            char* device_sdk_config_str = cJSON_PrintUnformatted(device_sdk_config);
+            if (device_sdk_config_str != nullptr) {
+                device_sdk_config_ = device_sdk_config_str;
+                cJSON_free(device_sdk_config_str);
+            } else {
+                has_device_sdk_config_ = false;
+                device_sdk_config_.clear();
+            }
+        } else {
+            device_sdk_config_.clear();
         }
     }
 

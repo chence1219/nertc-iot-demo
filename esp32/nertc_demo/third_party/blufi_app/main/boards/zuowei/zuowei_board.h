@@ -18,7 +18,7 @@ public:
     void InitializeSpi() override;
     void InitializeLcdDisplay() override;
 
-    LcdDisplay* GetDisplay() const override { return display_; }
+    Display* GetDisplay() const override { return display_; }
     Button* GetButton(int index) const override;
 
 private:

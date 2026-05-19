@@ -26,14 +26,12 @@
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
-#if CONFIG_USE_DEVICE_AEC && (CONFIG_USE_SERVER_AEC || CONFIG_USE_NERTC_SERVER_AEC)
+#if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
 #error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
 #elif CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
 #elif CONFIG_USE_SERVER_AEC
     aec_mode_ = kAecOnServerSide;
-#elif CONFIG_USE_NERTC_SERVER_AEC
-    aec_mode_ = kAecOnNertc;
 #else
     aec_mode_ = kAecOff;
 #endif
@@ -277,7 +275,8 @@ void Application::Run() {
 
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
-                SystemInfo::PrintHeapStats();
+                std::string state = SystemInfo::PrintHeapStats() + " state: " + std::string(DeviceStateMachine::GetStateName(GetDeviceState()));
+                ESP_LOGI(TAG, "%s", state.c_str());
             }
 #ifdef CONFIG_CONNECTION_TYPE_NERTC
             DealTimerEvent();
@@ -356,9 +355,6 @@ void Application::ActivationTask() {
     // Create OTA object for activation process
     ota_ = std::make_unique<Ota>();
 
-    // Check for new assets version
-    CheckAssetsVersion();
-
 #if CONFIG_CONNECTION_TYPE_NERTC
     ReadNertcConfig();
 #endif
@@ -374,8 +370,33 @@ void Application::ActivationTask() {
     CheckNewVersion();
 
     int interrupteMode = ota_->GetOtaAgentInterruptMode();
-    aec_mode_ = interrupteMode == 0 ? kAecOff : aec_mode_; //默认还是用 menuconfig 里面的配置
+    AecMode resolved_aec_mode = aec_mode_;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    if (resolved_aec_mode == kAecOff && config_enable_nertc_server_aec_) { //配置文件里面的 server_aec 配置
+        resolved_aec_mode = kAecOnNertc;
+    }
+#endif
+    aec_mode_ = interrupteMode == 0 ? kAecOff : resolved_aec_mode; //  默认还是用 menuconfig 里面的配置
     ESP_LOGI(TAG, "OTA agent interrupt mode: %d, set AEC mode to %d", interrupteMode, aec_mode_);
+
+    ota_device_sdk_config_ = ota_->GetDeviceSdkConfig();
+    ota_wake_word_creation_disabled_ = false;
+    if (!ota_device_sdk_config_.empty()) {
+        cJSON* ota_device_sdk_config_json = cJSON_Parse(ota_device_sdk_config_.c_str());
+        if (cJSON_IsObject(ota_device_sdk_config_json)) {
+            cJSON* awakens_enable = cJSON_GetObjectItem(ota_device_sdk_config_json, "awakensEnable");
+            if (cJSON_IsBool(awakens_enable) && !cJSON_IsTrue(awakens_enable)) {
+                ota_wake_word_creation_disabled_ = true;
+            }
+        }
+        if (ota_device_sdk_config_json != nullptr) {
+            cJSON_Delete(ota_device_sdk_config_json);
+        }
+    }
+
+    // Check for new assets version
+    CheckAssetsVersion();
+
 #ifdef CONFIG_USE_MUSIC_PLAYER
     auto& board = Board::GetInstance();
     auto codec = board.GetAudioCodec();
@@ -587,11 +608,13 @@ void Application::InitializeProtocol() {
 #endif
         ) {
             std::unique_ptr<AudioStreamPacket> reference_packet = nullptr;
-#if CONFIG_CONNECTION_TYPE_NERTC && CONFIG_USE_NERTC_SERVER_AEC
-            reference_packet = std::make_unique<AudioStreamPacket>();
-            reference_packet->payload = packet->payload;
-            reference_packet->timestamp = packet->timestamp;
-            reference_packet->sample_rate = protocol_->server_sample_rate();
+#if CONFIG_CONNECTION_TYPE_NERTC
+            if (aec_mode_ == kAecOnNertc) {
+                reference_packet = std::make_unique<AudioStreamPacket>();
+                reference_packet->payload = packet->payload;
+                reference_packet->timestamp = packet->timestamp;
+                reference_packet->sample_rate = protocol_->server_sample_rate();
+            }
 #endif
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
             if (reference_packet) {
@@ -1296,12 +1319,10 @@ void Application::SetAecMode(AecMode mode) {
             audio_service_.EnableDeviceAec(true);
             display->ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
-#if CONFIG_USE_NERTC_SERVER_AEC
         case kAecOnNertc:
             audio_service_.EnableDeviceAec(false);
             display->ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
-#endif
         default:
             break;
         }
@@ -1327,4 +1348,3 @@ void Application::ResetProtocol() {
         protocol_.reset();
     });
 }
-

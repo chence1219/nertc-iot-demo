@@ -20,6 +20,7 @@ public:
     bool HasWebsocketConfig() { return has_websocket_config_; }
     bool HasActivationCode() { return has_activation_code_; }
     bool HasServerTime() { return has_server_time_; }
+    bool HasDeviceSdkConfig() const { return has_device_sdk_config_; }
     bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
     static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
     void MarkCurrentVersionValid();
@@ -29,6 +30,7 @@ public:
     const std::string& GetFirmwareUrl() const { return firmware_url_; }
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
+    const std::string& GetDeviceSdkConfig() const { return device_sdk_config_; }
     std::string GetCheckVersionUrl();
     int GetOtaAgentInterruptMode() const { return agent_interrupt_mode_; }
     bool GetSupportAirMusicPlayer() const { return support_air_music_player; }
@@ -44,10 +46,12 @@ private:
     bool has_activation_code_ = false;
     bool has_serial_number_ = false;
     bool has_activation_challenge_ = false;
+    bool has_device_sdk_config_ = false;
     std::string current_version_;
     std::string firmware_version_;
     std::string firmware_url_;
     std::string activation_challenge_;
+    std::string device_sdk_config_;
     std::string serial_number_;
     int activation_timeout_ms_ = 30000;
     int agent_interrupt_mode_ = -1; //0:不打断，1:开始说话打断，2:结束说话打断, 3:打断词打断

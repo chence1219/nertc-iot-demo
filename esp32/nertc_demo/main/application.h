@@ -147,6 +147,8 @@ public:
     void ReadNertcConfig();
     bool GetNertcTestMode() const { return enable_test_mode_; }
     std::string GetAppkey() const { return appkey_; }
+    const std::string& GetOtaDeviceSdkConfig() const { return ota_device_sdk_config_; }
+    bool IsOtaWakeWordCreationDisabled() const { return ota_wake_word_creation_disabled_; }
     //
     void TestDestroy();
 #endif
@@ -173,6 +175,8 @@ private:
     std::string last_error_message_;
     AudioService audio_service_;
     std::unique_ptr<Ota> ota_;
+    std::string ota_device_sdk_config_;
+    bool ota_wake_word_creation_disabled_ = false;
 
     bool has_server_time_ = false;
     bool protocal_started_ = false;
@@ -247,6 +251,7 @@ private:
     // ai sleep
     bool ai_sleep_ = false;
     bool enable_test_mode_ = false;
+    bool config_enable_nertc_server_aec_ = false;
     std::string appkey_;
 #endif
 };

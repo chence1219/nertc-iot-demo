@@ -7,6 +7,10 @@
 namespace {
 constexpr const char* TAG = "NeRtcExternalOsal";
 constexpr int kMaxCondWaiters = 128;
+constexpr int kThreadStopTimeoutMs = 1000;
+constexpr EventBits_t kExternalThreadWakeBit = BIT0;
+constexpr EventBits_t kExternalThreadStopBit = BIT1;
+constexpr uint32_t kWaitForeverMs = 0xFFFFFFFFu;
 }
 
 NeRtcExternalOsal* NeRtcExternalOsal::instance_ = nullptr;
@@ -28,6 +32,8 @@ NeRtcExternalOsal::NeRtcExternalOsal() {
         .create_thread = CreateThread,
         .destroy_thread = DestroyThread,
         .thread_is_current = IsCurrentThread,
+        .thread_wait = WaitThread,
+        .thread_notify = NotifyThread,
 
         .create_timer = CreateTimer,
         .start_timer = StartTimer,
@@ -69,12 +75,19 @@ nertc_ext_thread_handle_t NeRtcExternalOsal::CreateThread(const char* name,
     auto* ctx = new ExternalThreadCtx();
     ctx->entry = entry;
     ctx->user_data = user_data;
+    ctx->event_group = xEventGroupCreate();
+    if (ctx->event_group == nullptr) {
+        ESP_LOGW(TAG, "CreateThread event group create failed");
+    } else {
+        xEventGroupClearBits(ctx->event_group, kExternalThreadWakeBit | kExternalThreadStopBit);
+    }
 
     const char* task_name = (name && name[0] != '\0') ? name : "nertc_ext_thread";
     const uint32_t task_stack_size = (stack_size > 0) ? static_cast<uint32_t>(stack_size) : 4096;
     UBaseType_t task_priority = (priority > 0) ? static_cast<UBaseType_t>(priority) : tskIDLE_PRIORITY + 1;
 
     BaseType_t ret = pdFAIL;
+    TaskHandle_t task_handle = nullptr;
     if (prefer_external_memory) {
         ret = xTaskCreatePinnedToCoreWithCaps(
             ThreadEntry,
@@ -82,7 +95,7 @@ nertc_ext_thread_handle_t NeRtcExternalOsal::CreateThread(const char* name,
             task_stack_size,
             ctx,
             task_priority,
-            &ctx->task_handle,
+            &task_handle,
             tskNO_AFFINITY,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (ret != pdPASS) {
@@ -91,13 +104,14 @@ nertc_ext_thread_handle_t NeRtcExternalOsal::CreateThread(const char* name,
     }
 
     if (ret != pdPASS) {
-        ret = xTaskCreate(ThreadEntry, task_name, task_stack_size, ctx, task_priority, &ctx->task_handle);
+        ret = xTaskCreate(ThreadEntry, task_name, task_stack_size, ctx, task_priority, &task_handle);
     }
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "CreateThread failed: %s", task_name);
         delete ctx;
         return nullptr;
     }
+    ctx->task_handle.store(task_handle, std::memory_order_release);
     return static_cast<nertc_ext_thread_handle_t>(ctx);
 }
 
@@ -107,15 +121,37 @@ void NeRtcExternalOsal::DestroyThread(nertc_ext_thread_handle_t handle) {
     }
 
     auto* ctx = static_cast<ExternalThreadCtx*>(handle);
-    TaskHandle_t task = ctx->task_handle;
+    TaskHandle_t task = ctx->task_handle.load(std::memory_order_acquire);
     if (task != nullptr) {
+        if (ctx->event_group != nullptr) {
+            xEventGroupSetBits(ctx->event_group, kExternalThreadStopBit);
+        }
         if (xTaskGetCurrentTaskHandle() == task) {
-            ctx->task_handle = nullptr;
+            ctx->task_handle.store(nullptr, std::memory_order_release);
+            if (ctx->event_group != nullptr) {
+                vEventGroupDelete(ctx->event_group);
+                ctx->event_group = nullptr;
+            }
             delete ctx;
             vTaskDelete(nullptr);
             return;
         }
-        vTaskDelete(task);
+
+        int waited_ms = 0;
+        while (ctx->task_handle.load(std::memory_order_acquire) != nullptr && waited_ms < kThreadStopTimeoutMs) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            waited_ms += 10;
+        }
+
+        task = ctx->task_handle.exchange(nullptr, std::memory_order_acq_rel);
+        if (task != nullptr) {
+            ESP_LOGW(TAG, "DestroyThread timeout, force delete task: %p", task);
+            vTaskDelete(task);
+        }
+    }
+    if (ctx->event_group != nullptr) {
+        vEventGroupDelete(ctx->event_group);
+        ctx->event_group = nullptr;
     }
     delete ctx;
 }
@@ -126,7 +162,51 @@ bool NeRtcExternalOsal::IsCurrentThread(nertc_ext_thread_handle_t handle) {
     }
 
     auto* ctx = static_cast<ExternalThreadCtx*>(handle);
-    return (ctx->task_handle != nullptr) && (xTaskGetCurrentTaskHandle() == ctx->task_handle);
+    TaskHandle_t task = ctx->task_handle.load(std::memory_order_acquire);
+    return (task != nullptr) && (xTaskGetCurrentTaskHandle() == task);
+}
+
+void NeRtcExternalOsal::WaitThread(nertc_ext_thread_handle_t handle, uint32_t timeout_ms) {
+    if (handle == nullptr) {
+        return;
+    }
+
+    auto* ctx = static_cast<ExternalThreadCtx*>(handle);
+    if (ctx->event_group == nullptr) {
+        if (timeout_ms != kWaitForeverMs && timeout_ms > 0) {
+            vTaskDelay(pdMS_TO_TICKS(timeout_ms));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        return;
+    }
+
+    TickType_t wait_ticks = 0;
+    if (timeout_ms == kWaitForeverMs) {
+        wait_ticks = portMAX_DELAY;
+    } else if (timeout_ms > 0) {
+        wait_ticks = pdMS_TO_TICKS(timeout_ms);
+        if (wait_ticks == 0) {
+            wait_ticks = 1;
+        }
+    }
+
+    xEventGroupWaitBits(ctx->event_group,
+                        kExternalThreadWakeBit | kExternalThreadStopBit,
+                        pdTRUE,
+                        pdFALSE,
+                        wait_ticks);
+}
+
+void NeRtcExternalOsal::NotifyThread(nertc_ext_thread_handle_t handle) {
+    if (handle == nullptr) {
+        return;
+    }
+
+    auto* ctx = static_cast<ExternalThreadCtx*>(handle);
+    if (ctx->event_group != nullptr) {
+        xEventGroupSetBits(ctx->event_group, kExternalThreadWakeBit);
+    }
 }
 
 nertc_ext_timer_handle_t NeRtcExternalOsal::CreateTimer(const char* name,
@@ -309,7 +389,7 @@ void NeRtcExternalOsal::ThreadEntry(void* arg) {
         ctx->entry(ctx->user_data);
     }
     if (ctx) {
-        ctx->task_handle = nullptr;
+        ctx->task_handle.store(nullptr, std::memory_order_release);
     }
     vTaskDelete(nullptr);
 }

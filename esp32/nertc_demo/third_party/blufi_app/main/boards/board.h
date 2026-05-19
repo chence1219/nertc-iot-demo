@@ -31,7 +31,7 @@ public:
     virtual void InitializeLcdDisplay() = 0;
 
     // 获取成员 - 纯虚函数，由子类实现
-    virtual LcdDisplay* GetDisplay() const = 0;
+    virtual Display* GetDisplay() const = 0;
     virtual Button* GetButton(int index) const = 0;
 };
 

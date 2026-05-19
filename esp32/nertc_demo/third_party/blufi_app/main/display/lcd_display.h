@@ -48,16 +48,16 @@ public:
     virtual void Unlock() override;
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;
-    void SetTheme(const std::string& theme_name);
-    void SetTitleText(const std::string& text);
-    void SetStatusProfile(const std::string& profile) {
+    virtual void SetTheme(const std::string& theme_name) override;
+    virtual void SetTitleText(const std::string& text) override;
+    virtual void SetStatusProfile(const std::string& profile) override {
         status_profile_ = profile;
     }
-    void SetStatusText(const std::string& text);
-    void SetVersionProfile(const std::string& profile) {
+    virtual void SetStatusText(const std::string& text) override;
+    virtual void SetVersionProfile(const std::string& profile) override {
         version_profile_ = profile;
     }
-    void SetVersionText(const std::string& version);
+    virtual void SetVersionText(const std::string& version) override;
 };
 
 class SpiLcdDisplay : public LcdDisplay {

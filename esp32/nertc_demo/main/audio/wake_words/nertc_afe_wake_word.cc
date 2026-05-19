@@ -149,6 +149,7 @@ bool NertcAfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list
     cJSON* config_json = nullptr;
     std::string custom_config_string;
     std::string local_config_appkey_;
+    cJSON* custom_config_root = nullptr;
 #if CONFIG_CONNECTION_TYPE_NERTC
     config_json = NeRtcProtocol::ReadConfigJson();
     if(config_json) {
@@ -159,16 +160,42 @@ bool NertcAfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list
         }
         cJSON* custom_config = cJSON_GetObjectItem(config_json, "custom_config");
         if (custom_config && cJSON_IsObject(custom_config)) {
-            custom_config_string = cJSON_Print(custom_config);
-            ESP_LOGI(TAG, "local config set custom_config to %s", custom_config_string.c_str());
+            custom_config_root = cJSON_Duplicate(custom_config, true);
         }
         config.appkey = local_config_appkey_.c_str();
-        config.custom_config = custom_config_string.c_str();
         cJSON_Delete(config_json);
-    } else {
-        config.appkey = nullptr;
-        config.custom_config = nullptr;
     }
+
+    if (custom_config_root == nullptr) {
+        custom_config_root = cJSON_CreateObject();
+    }
+
+    const std::string& ota_device_sdk_config = Application::GetInstance().GetOtaDeviceSdkConfig();
+    if (!ota_device_sdk_config.empty()) {
+        cJSON* ota_device_sdk_config_json = cJSON_Parse(ota_device_sdk_config.c_str());
+        if (cJSON_IsObject(ota_device_sdk_config_json)) {
+            cJSON* existing = cJSON_GetObjectItem(custom_config_root, "device_sdk_config");
+            if (existing != nullptr) {
+                cJSON_ReplaceItemInObject(custom_config_root, "device_sdk_config",
+                                          cJSON_Duplicate(ota_device_sdk_config_json, true));
+            } else {
+                cJSON_AddItemToObject(custom_config_root, "device_sdk_config",
+                                      cJSON_Duplicate(ota_device_sdk_config_json, true));
+            }
+        }
+        if (ota_device_sdk_config_json != nullptr) {
+            cJSON_Delete(ota_device_sdk_config_json);
+        }
+    }
+
+    char* custom_config_json = cJSON_PrintUnformatted(custom_config_root);
+    if (custom_config_json != nullptr) {
+        custom_config_string = custom_config_json;
+        cJSON_free(custom_config_json);
+        ESP_LOGI(TAG, "wake word custom_config=%s", custom_config_string.c_str());
+    }
+    config.custom_config = custom_config_string.c_str();
+    cJSON_Delete(custom_config_root);
 #else
     local_config_appkey_ = "";
     custom_config_string = "";

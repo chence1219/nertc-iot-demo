@@ -5,6 +5,7 @@
 
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
@@ -23,7 +24,8 @@ private:
 
 private:
     struct ExternalThreadCtx {
-        TaskHandle_t task_handle = nullptr;
+        std::atomic<TaskHandle_t> task_handle{nullptr};
+        EventGroupHandle_t event_group = nullptr;
         nertc_ext_thread_entry_func entry = nullptr;
         void* user_data = nullptr;
     };
@@ -49,6 +51,8 @@ private:
                                                   void* user_data);
     static void DestroyThread(nertc_ext_thread_handle_t handle);
     static bool IsCurrentThread(nertc_ext_thread_handle_t handle);
+    static void WaitThread(nertc_ext_thread_handle_t handle, uint32_t timeout_ms);
+    static void NotifyThread(nertc_ext_thread_handle_t handle);
 
     static nertc_ext_timer_handle_t CreateTimer(const char* name,
                                                 int interval_ms,

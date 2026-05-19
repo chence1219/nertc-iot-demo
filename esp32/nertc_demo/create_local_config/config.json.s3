@@ -6,13 +6,15 @@
 			"mode": 0,
 			"compression_gain_db": 9,
 			"target_level_dbfs": 3
-		}
+		},
+		"server_aec": false
 	},
 	"license_config": {
 		"license": ""
 	},
 	"ext_net_handle": false,
 	"ext_osal_handle": true,
+	"lite_mode": true,
 	"appkey":"xxxxxxxx",
 	"blufi_wifi" : true
 }

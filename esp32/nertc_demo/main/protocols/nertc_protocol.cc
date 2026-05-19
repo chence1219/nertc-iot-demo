@@ -1,11 +1,13 @@
 #include <string>
 #include <cstring>
+#include <mutex>
 #include "nertc_protocol.h"
 #include "nertc_external_network.h"
 #include "nertc_external_osal.h"
 #include "board.h"
 #include "display.h"
 #include "system_info.h"
+#include "settings.h"
 #include <esp_random.h>
 #include <esp_log.h>
 #include <application.h>
@@ -34,6 +36,12 @@ static const char* const RTC_CALL_STATE_STRINGS[] = {
     "connected",
 };
 
+namespace {
+std::mutex g_local_config_mutex;
+bool g_local_config_cached = false;
+NeRtcLocalConfig g_local_config_cache;
+}  // namespace
+
 #if NERTC_ENABLE_CONFIG_FILE
 std::string NeRtcProtocol::config_file_path_ = "/spiffs/config.json";
 #endif
@@ -47,68 +55,38 @@ NeRtcProtocol::NeRtcProtocol() {
     bool use_ext_net_handle = false;
     bool use_ext_osal_handle = false;
 #if NERTC_ENABLE_CONFIG_FILE
-    if (!NeRtcProtocol::MountFileSystem()) {
-        ESP_LOGE(TAG, "Failed to initialize file system");
-        return;
-    }
+    NeRtcLocalConfig local_config;
+    if (NeRtcProtocol::LoadLocalConfig(local_config)) {
+        local_config_appkey_ = local_config.appkey;
+        custom_config_string = local_config.custom_config_string;
+        asr_enabled_ = local_config.asr;
+        rtc_mode_ = local_config.rtc_call;
+        lite_mode_ = local_config.lite_mode;
+        nertc_server_aec_ = local_config.effective_nertc_server_aec;
+        local_frame_duration_config = local_config.frame_size_ms;
+        local_license_config = local_config.license;
+        use_ext_net_handle = local_config.ext_net_handle;
+        use_ext_osal_handle = local_config.ext_osal_handle;
 
-    auto* config_json = NeRtcProtocol::ReadConfigJson();
-    if(config_json) {
-        cJSON* appkey = cJSON_GetObjectItem(config_json, "appkey");
-        if (appkey && cJSON_IsString(appkey)) {
-            ESP_LOGI(TAG, "local config set appkey to %s", appkey->valuestring);
-            local_config_appkey_ = appkey->valuestring;
+        if (!local_config_appkey_.empty()) {
+            ESP_LOGI(TAG, "local config set appkey to %s", local_config_appkey_.c_str());
         }
-        cJSON* custom_config = cJSON_GetObjectItem(config_json, "custom_config");
-        if (custom_config && cJSON_IsObject(custom_config)) {
-            custom_config_string = cJSON_Print(custom_config);
+        if (!custom_config_string.empty()) {
             ESP_LOGI(TAG, "local config set custom_config to %s", custom_config_string.c_str());
-            cJSON* asr = cJSON_GetObjectItem(custom_config, "asr");
-            if (asr && cJSON_IsBool(asr)) {
-                asr_enabled_ = asr->valueint;
-                ESP_LOGI(TAG, "local config set asr to %d", asr_enabled_?1:0);
-            }
-            cJSON* rtc_call = cJSON_GetObjectItem(custom_config, "rtc_call");
-            if(rtc_call && cJSON_IsBool(rtc_call)) {
-                rtc_mode_ = rtc_call->valueint;
-                ESP_LOGI(TAG, "local config set rtc_p2p to %d", rtc_mode_?1:0);
-            }
         }
-        cJSON* audio_config = cJSON_GetObjectItem(config_json, "audio_config");
-        if (audio_config) {
-            cJSON* frame_size = cJSON_GetObjectItem(audio_config, "frame_size");
-            if (cJSON_IsNumber(frame_size)) {
-                ESP_LOGI(TAG, "local config set frame size to %d ms", frame_size->valueint);
-                local_frame_duration_config = cJSON_GetNumberValue(frame_size);
-            }
+        ESP_LOGI(TAG, "local config set asr to %d", asr_enabled_ ? 1 : 0);
+        ESP_LOGI(TAG, "local config set rtc_p2p to %d", rtc_mode_ ? 1 : 0);
+        if (local_frame_duration_config > 0) {
+            ESP_LOGI(TAG, "local config set frame size to %d ms", local_frame_duration_config);
         }
-        cJSON* license_config = cJSON_GetObjectItem(config_json, "license_config");
-        if (license_config) {
-            cJSON* local_license = cJSON_GetObjectItem(license_config, "license");
-            if (cJSON_IsString(local_license)) {
-                local_license_config = local_license->valuestring;
-                ESP_LOGI(TAG, "local license config, size: %d", local_license_config.size());
-            }
+        ESP_LOGI(TAG, "local config set nertc_server_aec to %d", nertc_server_aec_ ? 1 : 0);
+        if (!local_license_config.empty()) {
+            ESP_LOGI(TAG, "local license config, size: %d", local_license_config.size());
         }
-        cJSON* ext_net_handle_cfg = cJSON_GetObjectItem(config_json, "ext_net_handle");
-        if (cJSON_IsBool(ext_net_handle_cfg)) {
-            use_ext_net_handle = cJSON_IsTrue(ext_net_handle_cfg);
-            ESP_LOGI(TAG, "local config set ext_net_handle to %d", use_ext_net_handle ? 1 : 0);
-        } else if (cJSON_IsNull(ext_net_handle_cfg)) {
-            use_ext_net_handle = false;
-            ESP_LOGI(TAG, "local config set ext_net_handle to null");
-        }
-
-        cJSON* ext_osal_handle_cfg = cJSON_GetObjectItem(config_json, "ext_osal_handle");
-        if (cJSON_IsBool(ext_osal_handle_cfg)) {
-            use_ext_osal_handle = cJSON_IsTrue(ext_osal_handle_cfg);
-            ESP_LOGI(TAG, "local config set ext_osal_handle to %d", use_ext_osal_handle ? 1 : 0);
-        } else if (cJSON_IsNull(ext_osal_handle_cfg)) {
-            use_ext_osal_handle = false;
-            ESP_LOGI(TAG, "local config set ext_osal_handle to null");
-        }
-    }
-    else{
+        ESP_LOGI(TAG, "local config set ext_net_handle to %d", use_ext_net_handle ? 1 : 0);
+        ESP_LOGI(TAG, "local config set ext_osal_handle to %d", use_ext_osal_handle ? 1 : 0);
+        ESP_LOGI(TAG, "local config set lite_mode to %d", lite_mode_ ? 1 : 0);
+    } else {
         ESP_LOGE(TAG, "No local config file");
     }
 #endif
@@ -143,13 +121,31 @@ NeRtcProtocol::NeRtcProtocol() {
     sdk_config.optional_config.prefer_use_psram = false;
 #endif
 
-#if CONFIG_USE_NERTC_SERVER_AEC
-    sdk_config.optional_config.enable_server_aec = true;
-#else
-    sdk_config.optional_config.enable_server_aec = false;
-#endif
+    sdk_config.optional_config.enable_server_aec = nertc_server_aec_;
 
     sdk_config.optional_config.custom_config = custom_config_string.c_str();
+
+    std::string mqtt_endpoint;
+    std::string mqtt_client_id;
+    std::string mqtt_username;
+    std::string mqtt_password;
+    std::string mqtt_publish_topic;
+    if (lite_mode_) {
+        Settings mqtt_settings("mqtt", false);
+        mqtt_endpoint = mqtt_settings.GetString("endpoint");
+        mqtt_client_id = mqtt_settings.GetString("client_id");
+        mqtt_username = mqtt_settings.GetString("username");
+        mqtt_password = mqtt_settings.GetString("password");
+        mqtt_publish_topic = mqtt_settings.GetString("publish_topic");
+
+        sdk_config.mqtt_config.endpoint = mqtt_endpoint.empty() ? nullptr : mqtt_endpoint.c_str();
+        sdk_config.mqtt_config.client_id = mqtt_client_id.empty() ? nullptr : mqtt_client_id.c_str();
+        sdk_config.mqtt_config.username = mqtt_username.empty() ? nullptr : mqtt_username.c_str();
+        sdk_config.mqtt_config.password = mqtt_password.empty() ? nullptr : mqtt_password.c_str();
+        sdk_config.mqtt_config.publish_topic = mqtt_publish_topic.empty() ? nullptr : mqtt_publish_topic.c_str();
+        ESP_LOGI(TAG, "lite mode config endpoint:%s client_id:%s publish_topic:%s",
+                 mqtt_endpoint.c_str(), mqtt_client_id.c_str(), mqtt_publish_topic.c_str());
+    }
 
     // 日志配置
     sdk_config.log_cfg.log_level = NERTC_SDK_LOG_INFO;
@@ -175,7 +171,7 @@ NeRtcProtocol::NeRtcProtocol() {
 #if CONFIG_USE_NERTC_PTT_MODE
     engine_config.engine_mode = NERTC_SDK_ENGINE_MODE_PTT;
 #else
-    engine_config.engine_mode = NERTC_SDK_ENGINE_MODE_AI;
+    engine_config.engine_mode = lite_mode_ ? NERTC_SDK_ENGINE_MODE_LITE : NERTC_SDK_ENGINE_MODE_AI;
 #endif
     // feature配置
     engine_config.feature_config.enable_mcp_server = true;
@@ -214,10 +210,6 @@ NeRtcProtocol::NeRtcProtocol() {
     } else {
         engine_config.ext_osal_handle = nullptr;
     }
-
-#if NERTC_ENABLE_CONFIG_FILE
-    cJSON_Delete(config_json);
-#endif
 
     // 初始化引擎
     auto ret = nertc_init_engine(engine_, &engine_config);
@@ -281,30 +273,26 @@ bool NeRtcProtocol::Start() {
     // get checksum
     std::string checksum;
 #if USE_SAFE_MODE
-    RequestChecksum(checksum);
-    if (checksum.empty()) {
-        ESP_LOGE(TAG, "Failed to get checksum");
-        return false;
+    if (!lite_mode_) {
+        RequestChecksum(checksum);
+        if (checksum.empty()) {
+            ESP_LOGE(TAG, "Failed to get checksum");
+            return false;
+        }
     }
 #endif
 
     // join room
     uint64_t uid = UID;
 #if NERTC_ENABLE_CONFIG_FILE
-    cJSON* config_json = NeRtcProtocol::ReadConfigJson();
-    if(config_json) {
-        cJSON* custom_config = cJSON_GetObjectItem(config_json, "custom_config");
-        if (custom_config && cJSON_IsObject(custom_config)) {
-            cJSON* item = cJSON_GetObjectItem(custom_config, "cname");
-            if(item && cJSON_IsString(item)) {
-                cname_ = item->valuestring;
-            }
-            item = cJSON_GetObjectItem(custom_config, "uid");
-            if(item && cJSON_IsNumber(item)) {
-                uid = item->valueint;
-            }
+    NeRtcLocalConfig local_config;
+    if (NeRtcProtocol::LoadLocalConfig(local_config)) {
+        if (!local_config.cname.empty()) {
+            cname_ = local_config.cname;
         }
-        cJSON_Delete(config_json);
+        if (local_config.has_uid) {
+            uid = local_config.uid;
+        }
     }
 #endif
     if (cname_.empty()) {
@@ -332,6 +320,8 @@ bool NeRtcProtocol::OpenAudioChannel() {
         return false;
     }
 
+    xEventGroupClearBits(event_group_, START_AI_EVENT);
+
     if (!rtc_mode_) {
         auto ret = nertc_start_ai(engine_);
         if (ret != 0) {
@@ -350,13 +340,17 @@ bool NeRtcProtocol::OpenAudioChannel() {
         ESP_LOGI(TAG, "NeRtcProtocol OpenAudioChannel rtc p2p");
     }
 
-    xEventGroupWaitBits(event_group_, START_AI_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(2000)); //最长阻塞2秒
-
-    if (on_audio_channel_opened_ != nullptr) {
-        on_audio_channel_opened_();
+    // 等待服务器响应
+    EventBits_t bits = xEventGroupWaitBits(event_group_, START_AI_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(5000));
+    if (!(bits & START_AI_EVENT)) {
+        ESP_LOGE(TAG, "start ai timeout");
+        return false;
     }
 
     audio_channel_opened_.store(true);
+    if (on_audio_channel_opened_ != nullptr) {
+        on_audio_channel_opened_();
+    }
     return true;
 }
 
@@ -380,11 +374,11 @@ void NeRtcProtocol::CloseAudioChannel(bool send_goodbye) {
 
     nertc_stop_asr_caption(engine_);
 
-    if (on_audio_channel_closed_ != nullptr) {
+    bool was_open = audio_channel_opened_.exchange(false);
+    if (was_open && on_audio_channel_closed_ != nullptr) {
         on_audio_channel_closed_();
     }
-
-    audio_channel_opened_.store(false);
+    session_id_.clear();
 }
 
 bool NeRtcProtocol::IsAudioChannelOpened() const {
@@ -684,6 +678,8 @@ void NeRtcProtocol::OnJoin(const nertc_sdk_callback_context_t* ctx, uint64_t cid
     if (ctx->engine && instance) {
         if (code != NERTC_SDK_ERR_SUCCESS) {
             ESP_LOGE(TAG, "Failed to join room, error: %d", code);
+            instance->join_.store(false);
+            xEventGroupSetBits(instance->event_group_, JOIN_EVENT);
             return;
         }
 
@@ -707,7 +703,8 @@ void NeRtcProtocol::OnDisconnect(const nertc_sdk_callback_context_t* ctx, nertc_
     if (!instance)
         return;
 
-    instance->CloseAudioChannel();;
+    instance->CloseAudioChannel();
+    instance->join_.store(false);
     ESP_LOGI(TAG, "Stop for receive OnDisconnect, please restart later");
 }
 
@@ -718,14 +715,14 @@ void NeRtcProtocol::OnUserJoined(const nertc_sdk_callback_context_t* ctx, const 
     if (!instance)
         return;
 
+    xEventGroupSetBits(instance->event_group_, START_AI_EVENT);
+
     if (instance->GetP2PCallState() != kNERtcP2PCallStateIdle) {
         instance->SetP2PCallState(kNERtcP2PCallStateConnected);
     }
     if (user && user->type == NERTC_SDK_USER_SIP) {
         Board::GetInstance().GetDisplay()->SetEmotionForce("call", true);
     }
-
-    xEventGroupSetBits(instance->event_group_, START_AI_EVENT);
 }
 
 void NeRtcProtocol::OnUserLeft(const nertc_sdk_callback_context_t* ctx, const nertc_sdk_user_info* user, int reason) {
@@ -740,6 +737,10 @@ void NeRtcProtocol::OnUserLeft(const nertc_sdk_callback_context_t* ctx, const ne
     }
     if (user && user->type == NERTC_SDK_USER_SIP) {
         Board::GetInstance().GetDisplay()->SetEmotionForce("neutral", false);
+    }
+
+    if (instance->lite_mode_) {
+        instance->CloseAudioChannel();
     }
 }
 
@@ -770,20 +771,16 @@ void NeRtcProtocol::OnAiData(const nertc_sdk_callback_context_t* ctx, nertc_sdk_
     if (!ai_data)
         return;
 
-    // std::string type(ai_data->type, ai_data->type_len);
-    // std::string data(ai_data->data, ai_data->data_len);
-    const char* type_str = ai_data->type;
-    size_t type_len = ai_data->type_len;
-    const char* data_str = ai_data->data;
+    std::string type(ai_data->type ? ai_data->type : "", ai_data->type_len);
+    std::string data(ai_data->data ? ai_data->data : "", ai_data->data_len);
+    const char* type_str = type.c_str();
+    size_t type_len = type.length();
+    const char* data_str = data.c_str();
     ESP_LOGI(TAG, "NERtc OnAiData type:%s data:%s", type_str, data_str);
 
     NeRtcProtocol* instance = static_cast<NeRtcProtocol*>(ctx->user_data);
     if (!instance)
         return;
-    if (!instance->IsAudioChannelOpened()) {
-        ESP_LOGE(TAG, "NERtc OnAiData: audio channel is not opened");
-        return;
-    }
 
     if (strncmp(type_str, "event", type_len) == 0) {
         cJSON* data_json = cJSON_Parse(data_str);
@@ -910,7 +907,7 @@ void NeRtcProtocol::OnAiData(const nertc_sdk_callback_context_t* ctx, nertc_sdk_
         if (instance->on_incoming_json_) instance->on_incoming_json_(emot_json);
         cJSON_Delete(emot_json);
         cJSON_Delete(data_json);
-    } else if (strncmp(type_str, "mcp", type_len) == 0) {
+    } else if (strncmp(type_str, "mcp", type_len) == 0 && !instance->lite_mode_) {
         cJSON* payload_obj = cJSON_Parse(data_str);
         if (!payload_obj) {
             ESP_LOGE(TAG, "Failed to parse JSON data");
@@ -996,6 +993,18 @@ void NeRtcProtocol::OnAiData(const nertc_sdk_callback_context_t* ctx, nertc_sdk_
         cJSON_AddItemToObject(app_json, "payload", data_json);
         if (instance->on_incoming_json_) instance->on_incoming_json_(app_json);
         cJSON_Delete(app_json);
+    } else {
+        if (instance->lite_mode_) { //透传到应用层
+            cJSON* root = cJSON_Parse(data.c_str());
+            if (!root) {
+                ESP_LOGE(TAG, "lite mode raw message parse failed");
+                return;
+            }
+            if (instance->on_incoming_json_) {
+                instance->on_incoming_json_(root);
+            }
+            cJSON_Delete(root);
+        }
     }
 }
 
@@ -1042,7 +1051,13 @@ bool NeRtcProtocol::SendText(const std::string& text) {
     ESP_LOGI(TAG, "SendText: %s", text.c_str());
     if (!engine_)
         return false;
+
     cJSON* data_json = cJSON_Parse(text.c_str());
+    if (!data_json) {
+        ESP_LOGE(TAG, "SendText parse failed");
+        return false;
+    }
+
     cJSON* type_item = cJSON_GetObjectItem(data_json, "type");
     if (type_item == nullptr || !cJSON_IsString(type_item)) {
         ESP_LOGE(TAG, "type is null");
@@ -1067,6 +1082,32 @@ bool NeRtcProtocol::SendText(const std::string& text) {
             nertc_ai_manual_start_listen(engine_);
         } else if (state == "stop") {
             nertc_ai_manual_stop_listen(engine_);
+        }
+    } else if (type == "mcp") {
+        cJSON* payload_item = cJSON_GetObjectItem(data_json, "payload");
+        if (payload_item == nullptr) {
+            ESP_LOGE(TAG, "mcp payload is null");
+            cJSON_Delete(data_json);
+            return false;
+        }
+
+        char* payload_str = cJSON_PrintUnformatted(payload_item);
+        if (payload_str == nullptr) {
+            ESP_LOGE(TAG, "mcp payload serialize failed");
+            cJSON_Delete(data_json);
+            return false;
+        }
+
+        nertc_sdk_mcp_tool_result_t result;
+        nertc_sdk_mcp_tool_result_init(&result);
+        result.payload = payload_str;
+        result.payload_len = strlen(payload_str);
+        int ret = nertc_ai_reply_mcp_tool_call(engine_, &result);
+        cJSON_free(payload_str);
+        if (ret != 0) {
+            ESP_LOGE(TAG, "send mcp payload failed, error: %d", ret);
+            cJSON_Delete(data_json);
+            return false;
         }
     }
 
@@ -1179,6 +1220,70 @@ cJSON* NeRtcProtocol::ReadConfigJson() {
 
     return json;
 }
+
+bool NeRtcProtocol::LoadLocalConfig(NeRtcLocalConfig& config) {
+    {
+        std::lock_guard<std::mutex> lock(g_local_config_mutex);
+        if (g_local_config_cached) {
+            config = g_local_config_cache;
+            return true;
+        }
+    }
+
+    NeRtcLocalConfig loaded_config;
+    cJSON* config_json = ReadConfigJson();
+    if (config_json == nullptr) {
+        return false;
+    }
+
+    loaded_config.valid = true;
+    ReadJsonString(config_json, "appkey", loaded_config.appkey);
+    ReadJsonBool(config_json, "lite_mode", loaded_config.lite_mode);
+    ReadJsonBool(config_json, "ext_net_handle", loaded_config.ext_net_handle);
+    ReadJsonBool(config_json, "ext_osal_handle", loaded_config.ext_osal_handle);
+
+    cJSON* custom_config = cJSON_GetObjectItem(config_json, "custom_config");
+    if (cJSON_IsObject(custom_config)) {
+        CopyJsonObjectString(custom_config, loaded_config.custom_config_string);
+        ReadJsonBool(custom_config, "test_mode", loaded_config.test_mode);
+        ReadJsonBool(custom_config, "asr", loaded_config.asr);
+        ReadJsonBool(custom_config, "rtc_call", loaded_config.rtc_call);
+        ReadJsonString(custom_config, "cname", loaded_config.cname);
+        loaded_config.has_uid = ReadJsonUint64(custom_config, "uid", loaded_config.uid);
+    }
+
+    cJSON* audio_config = cJSON_GetObjectItem(config_json, "audio_config");
+    bool has_server_aec = false;
+    if (cJSON_IsObject(audio_config)) {
+        ReadJsonInt(audio_config, "frame_size", loaded_config.frame_size_ms);
+        has_server_aec = ReadJsonBool(audio_config, "server_aec", loaded_config.nertc_server_aec);
+    }
+    if (!has_server_aec && cJSON_IsObject(custom_config)) {
+        ReadJsonBool(custom_config, "nertc_server_aec", loaded_config.nertc_server_aec);
+    }
+
+    cJSON* license_config = cJSON_GetObjectItem(config_json, "license_config");
+    if (cJSON_IsObject(license_config)) {
+        ReadJsonString(license_config, "license", loaded_config.license);
+    }
+
+    loaded_config.effective_nertc_server_aec = loaded_config.nertc_server_aec && !loaded_config.lite_mode;
+    cJSON_Delete(config_json);
+
+    {
+        std::lock_guard<std::mutex> lock(g_local_config_mutex);
+        g_local_config_cache = loaded_config;
+        g_local_config_cached = true;
+        config = g_local_config_cache;
+    }
+    return true;
+}
+
+void NeRtcProtocol::InvalidateLocalConfigCache() {
+    std::lock_guard<std::mutex> lock(g_local_config_mutex);
+    g_local_config_cache = NeRtcLocalConfig{};
+    g_local_config_cached = false;
+}
 #endif
 
 void NeRtcProtocol::SetP2PCallState(NERtcP2PCallState state) {
@@ -1248,4 +1353,65 @@ void NeRtcProtocol::TestDestroy() {
     }
 
     ESP_LOGI(TAG, "TestDestroy success");
+}
+
+bool NeRtcProtocol::ReadJsonBool(cJSON* object, const char* key, bool& value) {
+    if (!cJSON_IsObject(object)) {
+        return false;
+    }
+    cJSON* item = cJSON_GetObjectItem(object, key);
+    if (!cJSON_IsBool(item)) {
+        return false;
+    }
+    value = cJSON_IsTrue(item);
+    return true;
+}
+
+bool NeRtcProtocol::ReadJsonInt(cJSON* object, const char* key, int& value) {
+    if (!cJSON_IsObject(object)) {
+        return false;
+    }
+    cJSON* item = cJSON_GetObjectItem(object, key);
+    if (!cJSON_IsNumber(item)) {
+        return false;
+    }
+    value = item->valueint;
+    return true;
+}
+
+bool NeRtcProtocol::ReadJsonUint64(cJSON* object, const char* key, uint64_t& value) {
+    if (!cJSON_IsObject(object)) {
+        return false;
+    }
+    cJSON* item = cJSON_GetObjectItem(object, key);
+    if (!cJSON_IsNumber(item)) {
+        return false;
+    }
+    value = static_cast<uint64_t>(cJSON_GetNumberValue(item));
+    return true;
+}
+
+bool NeRtcProtocol::ReadJsonString(cJSON* object, const char* key, std::string& value) {
+    if (!cJSON_IsObject(object)) {
+        return false;
+    }
+    cJSON* item = cJSON_GetObjectItem(object, key);
+    if (!cJSON_IsString(item)) {
+        return false;
+    }
+    value = item->valuestring;
+    return true;
+}
+
+void NeRtcProtocol::CopyJsonObjectString(cJSON* object, std::string& value) {
+    value.clear();
+    if (!cJSON_IsObject(object)) {
+        return;
+    }
+    char* json = cJSON_Print(object);
+    if (json == nullptr) {
+        return;
+    }
+    value = json;
+    cJSON_free(json);
 }

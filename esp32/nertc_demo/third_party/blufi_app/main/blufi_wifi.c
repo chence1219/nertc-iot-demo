@@ -325,7 +325,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
     case ESP_BLUFI_EVENT_INIT_FINISH:
         BLUFI_INFO("BLUFI init finish\n");
 
-        esp_blufi_adv_start(g_blufi_ctx->device_name);
+        esp_blufi_adv_start_with_name(g_blufi_ctx->device_name);
         break;
     case ESP_BLUFI_EVENT_DEINIT_FINISH:
         BLUFI_INFO("BLUFI deinit finish\n");
@@ -341,7 +341,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         BLUFI_INFO("BLUFI ble disconnect\n");
         g_blufi_ctx->ble_connected = false;
         blufi_security_deinit();
-        esp_blufi_adv_start(g_blufi_ctx->device_name);
+        esp_blufi_adv_start_with_name(g_blufi_ctx->device_name);
         break;
     case ESP_BLUFI_EVENT_SET_WIFI_OPMODE:
         BLUFI_INFO("BLUFI Set WIFI opmode %d\n", param->wifi_mode.op_mode);

@@ -22,6 +22,6 @@ third_party/blufi_app/build/blufi_app.bin
 ```bash
 esptool.py --chip esp32s3 \
            --port /dev/cu.usbmodem144101 \
-           write_flash 0x830000 \
+           write_flash 0x520000 \
            third_party/blufi_app/build/blufi_app.bin
 ```

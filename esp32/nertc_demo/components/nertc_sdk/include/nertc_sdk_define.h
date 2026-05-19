@@ -30,6 +30,7 @@ typedef enum {
 typedef enum {
   NERTC_SDK_ENGINE_MODE_AI = 0,
   NERTC_SDK_ENGINE_MODE_PTT = 1,
+  NERTC_SDK_ENGINE_MODE_LITE = 2,
 } nertc_sdk_engine_mode_e;
 
 typedef enum {
@@ -120,6 +121,14 @@ typedef struct nertc_sdk_optional_configuration {
   const char* custom_config;
 } nertc_sdk_optional_configuration_t;
 
+typedef struct nertc_sdk_mqtt_config {
+  const char* endpoint;
+  const char* client_id;
+  const char* username;
+  const char* password;
+  const char* publish_topic;
+} nertc_sdk_mqtt_config_t;
+
 typedef struct nertc_sdk_configuration {
   const char* app_key;    /**< 应用的AppKey */
   const char* device_id;  /**< 设备ID */
@@ -130,6 +139,7 @@ typedef struct nertc_sdk_configuration {
   nertc_sdk_licence_config_t licence_cfg;             /**< licence 配置 */
   nertc_sdk_audio_config_t audio_config;              /**< 走设备本地 AEC 时的音频配置 */
   nertc_sdk_optional_configuration_t optional_config; /**< 可选功能配置 */
+  nertc_sdk_mqtt_config_t mqtt_config;                /**< MQTT 配置 */
   nertc_sdk_log_config_t log_cfg;                     /**< 日志配置 */
 } nertc_sdk_configuration_t;
 

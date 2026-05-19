@@ -338,6 +338,7 @@ mqtt_handle NeRtcExternalNetwork::CreateMqtt() {
         return nullptr;
     }
     Mqtt* mqtt = mqtt_unique.release();
+    mqtt->SetKeepAlive(120);
     return static_cast<void*>(mqtt);
 }
 

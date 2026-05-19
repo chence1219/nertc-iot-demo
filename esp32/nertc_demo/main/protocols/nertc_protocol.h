@@ -20,6 +20,25 @@ enum NERtcP2PCallState {
     kNERtcP2PCallStateConnected,
 };
 
+struct NeRtcLocalConfig {
+    bool valid = false;
+    std::string appkey;
+    std::string custom_config_string;
+    std::string license;
+    std::string cname;
+    uint64_t uid = 0;
+    bool has_uid = false;
+    bool test_mode = false;
+    bool asr = true;
+    bool rtc_call = false;
+    bool lite_mode = false;
+    bool nertc_server_aec = false;
+    bool effective_nertc_server_aec = false;
+    int frame_size_ms = 0;
+    bool ext_net_handle = false;
+    bool ext_osal_handle = false;
+};
+
 class NeRtcProtocol : public Protocol {
 public:
     NeRtcProtocol();
@@ -38,6 +57,14 @@ public:
     void SendLlmImage(const char* img_url, const int32_t img_len, const int compress_type, const std::string& text, int img_type) override;
 
     void TestDestroy() override;
+
+public:
+    static bool ReadJsonBool(cJSON* object, const char* key, bool& value);
+    static bool ReadJsonInt(cJSON* object, const char* key, int& value);
+    static bool ReadJsonUint64(cJSON* object, const char* key, uint64_t& value);
+    static bool ReadJsonString(cJSON* object, const char* key, std::string& value);
+    static void CopyJsonObjectString(cJSON* object, std::string& value);
+    
 private:
     void RequestChecksum(std::string& checksum);
     void ParseFunctionCall(cJSON* data, std::string& arguments, std::string& name);
@@ -86,6 +113,8 @@ public:
 
     static std::string config_file_path_;
     static cJSON* ReadConfigJson();
+    static bool LoadLocalConfig(NeRtcLocalConfig& config);
+    static void InvalidateLocalConfigCache();
 #endif
     void SetP2PCallState(NERtcP2PCallState state);
     NERtcP2PCallState GetP2PCallState();
@@ -93,6 +122,8 @@ private:
     std::string local_config_appkey_;
     bool asr_enabled_ = true;
     bool rtc_mode_ = false; // donot start ai
+    bool lite_mode_ = true;
+    bool nertc_server_aec_ = false;
     NERtcP2PCallState rtc_p2p_state_ = kNERtcP2PCallStateIdle;
     std::chrono::steady_clock::time_point rtc_p2p_start_time_;
 

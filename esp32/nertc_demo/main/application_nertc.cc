@@ -231,14 +231,14 @@ void Application::TouchActive(int value_head, int value_body) {
 #else
                     touch_count_ = 50;
 #endif
-                    protocol_->SendMcpMessage("正在抚摸你的头，请提供相关的情绪价值，回答");
+                    protocol_->SendLlmText("正在抚摸你的头，请提供相关的情绪价值，回答");
                 } else if (value_body > last_value_body * 1.1) {
 #ifdef CONFIG_BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2
                     touch_count_ = 10;
 #else
                     touch_count_ = 50;
 #endif
-                    protocol_->SendMcpMessage("正在抚摸你的身体，请提供相关的情绪价值，回答");
+                    protocol_->SendLlmText("正在抚摸你的身体，请提供相关的情绪价值，回答");
                 }
             }
         } else if (GetDeviceState() == kDeviceStateIdle) {
@@ -361,9 +361,9 @@ void Application::Shake(float mag, float delta, bool is_strong) {
     }
     if (GetDeviceState() == kDeviceStateListening) {
         if (is_strong) {
-            protocol_->SendMcpMessage("你被剧烈摇晃。请以委屈/迷糊/激动等情绪表达。");
+            protocol_->SendLlmText("你被剧烈摇晃。请以委屈/迷糊/激动等情绪表达。");
         } else if (GetDeviceState() == kDeviceStateListening) {
-            protocol_->SendMcpMessage("正在轻微摇晃你。请以平和、安抚的语气回应，如果连续2次以上以委屈/迷糊/激动等情绪表达。");
+            protocol_->SendLlmText("正在轻微摇晃你。请以平和、安抚的语气回应，如果连续2次以上以委屈/迷糊/激动等情绪表达。");
         }
     }
 }
@@ -371,7 +371,7 @@ void Application::Shake(float mag, float delta, bool is_strong) {
 void Application::LiftUp() {
     ESP_LOGI(TAG, " LiftUp");
     if (GetDeviceState() == kDeviceStateListening) {
-        protocol_->SendMcpMessage("你被举高高。请以快乐、兴奋的语气回应。");
+        protocol_->SendLlmText("你被举高高。请以快乐、兴奋的语气回应。");
     }
 }
 
@@ -508,27 +508,15 @@ void Application::SetAISleep() {
 
 void Application::ReadNertcConfig() {
 #if NERTC_ENABLE_CONFIG_FILE
-    if (!NeRtcProtocol::MountFileSystem()) {
-        ESP_LOGE(TAG, "Failed to initialize file system");
-        return;
-    }
-
-    auto* config_json = NeRtcProtocol::ReadConfigJson();
-    if(config_json) {
-        cJSON* custom_config = cJSON_GetObjectItem(config_json, "custom_config");
-        if (custom_config && cJSON_IsObject(custom_config)) {
-            cJSON* test_mode = cJSON_GetObjectItem(custom_config, "test_mode");
-            if(test_mode && cJSON_IsBool(test_mode)) {
-                enable_test_mode_ = (test_mode->valueint ? true : false);
-                ESP_LOGI(TAG, "local config set test mode to %d", enable_test_mode_ ? 1 : 0);
-            }
-        }
-        cJSON* appkey_json = cJSON_GetObjectItem(config_json, "appkey");
-        if (appkey_json && cJSON_IsString(appkey_json)) {
-            appkey_ = appkey_json->valuestring;
-        }
-        cJSON_Delete(config_json);
-    } else{
+    NeRtcLocalConfig local_config;
+    if (NeRtcProtocol::LoadLocalConfig(local_config)) {
+        enable_test_mode_ = local_config.test_mode;
+        appkey_ = local_config.appkey;
+        config_enable_nertc_server_aec_ = local_config.effective_nertc_server_aec;
+        ESP_LOGI(TAG, "local config set test mode to %d", enable_test_mode_ ? 1 : 0);
+        ESP_LOGI(TAG, "local config set lite_mode to %d", local_config.lite_mode ? 1 : 0);
+        ESP_LOGI(TAG, "local config set nertc_server_aec to %d", config_enable_nertc_server_aec_ ? 1 : 0);
+    } else {
         ESP_LOGW(TAG, "no local config file");
     }
 #endif
