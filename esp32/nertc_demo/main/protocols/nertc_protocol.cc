@@ -374,10 +374,11 @@ void NeRtcProtocol::CloseAudioChannel(bool send_goodbye) {
 
     nertc_stop_asr_caption(engine_);
 
-    bool was_open = audio_channel_opened_.exchange(false);
-    if (was_open && on_audio_channel_closed_ != nullptr) {
+    if (on_audio_channel_closed_ != nullptr) {
         on_audio_channel_closed_();
     }
+
+    audio_channel_opened_.store(false);
     session_id_.clear();
 }
 

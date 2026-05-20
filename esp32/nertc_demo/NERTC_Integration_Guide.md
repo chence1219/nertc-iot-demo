@@ -3,7 +3,7 @@
 本文档面向在 **xiaozhi-esp32** 项目基础上集成网易云信 NERtc IoT SDK 的开发者，说明如何将 NERtc 能力引入现有工程。
 
 > **SDK 版本**：1.2.7
-> **文档更新时间**：2026-05-15
+> **文档更新时间**：2026-05-19
 > **ESP-IDF 版本**：release-v5.5（兼容，见注意事项）
 > **Demo 工程路径**：`demo/esp32/`
 
@@ -74,7 +74,7 @@ idf_component_register(SRCS ${SOURCES}
 
 路径：`third_party/blufi_app/`
 
-用于蓝牙配网（BluFi）和小程序操作的独立可执行文件，烧入设备的 `blufi` 分区。
+用于蓝牙配网（BluFi）和小程序操作的独立可执行文件，烧入设备的 `blufi` 分区。当前仅 ESP32-S3 提供预编译的独立 BluFi App。
 
 > **注意**：部分特殊版本或带 display 的硬件可能无法正常使用，遇到兼容问题请联系技术支持。
 
@@ -133,8 +133,8 @@ idf_component_register(SRCS ${SOURCES}
 
 - **`Board::GetSystemInfoJson()`**：追加 OTA 鉴权流程，上报设备信息（型号、固件版本）及云音乐功能开关等字段。
 - **`Board::GetBoardName()`**：返回设备型号字符串，用于 OTA 鉴权和系统信息上报。
-- **`Board::StartBlufiMode()`**：启动蓝牙配网流程（BluFi），支持小程序操作设备入网。
-- **`Board::StartBlufiOtaMode()`**：蓝牙配网模块内的 OTA 升级流程。
+- **`Board::StartBlufiMode()`**：启动蓝牙配网流程（BluFi），支持小程序操作设备入网。当前独立 BluFi App 仅支持 ESP32-S3。
+- **`Board::StartBlufiOtaMode()`**：蓝牙配网模块内的 OTA 升级流程，当前独立 BluFi App 仅支持 ESP32-S3。
 
 #### 4.2.2 `dual_network_board.cc`
 
@@ -148,8 +148,9 @@ idf_component_register(SRCS ${SOURCES}
 
 #### 4.3.1 `main/display/display.h`
 
-1、追加 `SetEmotionForce()` 方法，用于设置表情强制播放。需要在本地对应的 display 中添加 `SetEmotionForce()` 方法。
-2、如果不需要强制播放表情，可以在 `main\protocols\nertc_protocol.cc` 中将 `SetEmotionForce()` 方法改成 `SetEmotion()`。然后放弃`main/display/display.h`的修改。
+示例在 `main/protocols/nertc_protocol.cc` 中使用 `SetEmotionForce()` 强制更新表情。目标工程有两种接入方式：
+- 保留该能力：在 `Display` 基类和本地 display 实现中增加 `SetEmotionForce()`。
+- 不需要强制表情：将协议层调用改为已有的 `SetEmotion()`，并跳过 `display.h` 的接口扩展。
 
 ### 4.4 云音乐播放器（`main/music_player/`）
 
@@ -158,10 +159,7 @@ idf_component_register(SRCS ${SOURCES}
 | `music_player.cc/h` | 云音乐播放器逻辑 |
 | `mp3_online_player.cc/h` | MP3 在线流播放实现 |
 
-**使用前提**：
-1. 后台智能体已配置云音乐 MCP。
-2. `menuconfig` 中开启 `CONFIG_USE_MUSIC_PLAYER`（仅 ESP32-S3/P4 + PSRAM 支持）。
-3. OTA 同步接口返回中包含云音乐权限字段，且后台已开启设备的云音乐权限。
+本节只列出代码移植涉及的文件。云音乐的开通条件、OTA 字段和播放打断要求见[第 8.3 节](#83-云音乐播放)。
 
 ### 4.5 协议层（`main/protocols/`）
 
@@ -199,12 +197,12 @@ if (use_ext_osal_handle) {
 
 `NeRtcExternalNetwork` 是外部网络抽象层，封装了 HTTP、TCP、UDP、MQTT 的具体实现，并通过函数指针表（`ext_net_handle`）暴露给 NERtc SDK。SDK 收到该 handle 后，会将所有网络 I/O 委托给应用侧提供的实现，**完全绕过 SDK 内置的网络栈**。
 
-**需要设置 `ext_net_handle` 的场景：**
+**需要或建议设置 `ext_net_handle` 的场景：**
 
 | 场景 | 说明 |
 |------|------|
-| 4G 模块（ML307/EC801E 等） | SDK 内置网络栈依赖 lwIP socket API，4G 模块有独立的网络接口，必须通过外部 handle 桥接。参考实现见 `components/esp-ml307`（详见[第 8.4 节](#84-4g-模组接入esp-ml307)） |
-| **ESP32-P4 + ESP-Hosted 仆从芯片** | **P4 无内置 WiFi**，通过 SPI/SDIO 连接仆从 ESP32 提供网络，网络操作需通过 esp-hosted host API 实现，必须设置外部 handle。仆从芯片固件参考 https://github.com/espressif/esp-hosted（详见[第 8.5 节](#85-esp32-p4--esp-hosted-仆从芯片网络接入)） |
+| 4G 模块（ML307/EC801E 等） | SDK 内置网络栈依赖 lwIP socket API，4G 模块有独立的网络接口，必须通过外部 handle 桥接。参考实现见 `components/esp-ml307`（详见[第 8.5 节](#85-4g-模组接入esp-ml307)） |
+| **ESP32-P4 + ESP-Hosted 仆从芯片** | **P4 无内置 WiFi**，通过 SPI/SDIO 连接仆从 ESP32 提供网络。当前示例建议显式设置外部 handle，让 SDK 使用应用侧同一工程编译的网络实现；底层仍可复用 esp-hosted host 注册后的 lwIP socket。仆从芯片固件参考 https://github.com/espressif/esp-hosted（详见[第 8.6 节](#86-esp32-p4--esp-hosted-仆从芯片网络接入)） |
 | **IDF 版本不一致** | SDK 预编译库的 IDF 版本与用户工程不同时，SDK 内置网络栈可能存在 ABI 不兼容（如 `esp_http_client`、socket 结构体布局变化），导致运行时崩溃或连接异常。此时需要设置 `ext_net_handle`，让 SDK 调用用户工程编译的网络实现 |
 
 **WiFi + IDF 版本一致**时，`ext_net_handle` 可设为 `nullptr`，SDK 使用内置网络栈。当前 `create_local_config/config.json.s3` 的默认值也是：
@@ -273,12 +271,12 @@ if (use_ext_osal_handle) {
 | `CONFIG_CONNECTION_TYPE_NERTC` | 创建 `NeRtcProtocol` 实例，初始化云信通道 |
 | `CONFIG_USE_MUSIC_PLAYER` | 初始化云音乐播放器，处理 `updateSongList` 指令 |
 | `CONFIG_USE_NERTC_PTT_MODE` | 启用按键对讲（PTT）模式逻辑 |
-| `CONFIG_USE_NERTC_SERVER_AEC` | 切换到云端 AEC 模式，使用 PCM 推送接口 |
 
 其他关键扩展：
 - `protocol_->OnAudioChannelClosed`：关闭音频通道后异步设置表情为 `sleepy`。
 - `protocol_->OnIncomingJson`：解析 `system->sleep`、`app`、`alarm` 等服务器下发的扩展消息。
-- `ai_sleep_` 标志位管理，完善 AI 休眠逻辑。
+- `ai_sleep_`、`current_pedding_speaking_`、`ResetDecoder()` 等状态和播放链路处理，用于对齐 AI 休眠、TTS 起播和用户打断行为。
+- 云音乐、PTT、Server AEC 均为条件能力：未开启对应 Kconfig 或 `config.bin` 配置时，不需要合入对应分支。
 
 #### 4.6.3 `application_nertc.cc`
 
@@ -329,12 +327,14 @@ idf_component_register(SRCS ${SOURCES}
 
 ### 4.10 main/mcp_server.cc
 
-云信相关扩展：
+云信相关 MCP 扩展可以按目标产品能力选择接入，不要求所有工具一次性合入：
 - **`self.good_bye`** MCP Tool：让设备主动退出 AI 对话。
 - **`self.photo_explain`** MCP Tool：触发摄像头拍照并上传识别。
-- **`self.cancel_alarm_ringing`** MCP Tool：取消正在响铃的闹钟。
+- **`self.cancel_alarm`** MCP Tool：取消正在响铃的闹钟。
 - **服务器动态禁用 Tool**：解析 `capabilities.disableTools` 字段，配合 `IsToolDisabled()` 接口，支持服务器动态下发不支持的 Tool 列表。
 - **`GetToolsList()`**：`max_payload_size` 扩大至 `8000`，避免 Tool 列表过长时被截断。
+
+如果目标工程不需要对应能力，可以不注册相关 MCP Tool；如果注册了 Tool，需要同时确认 Application 层已经实现对应处理逻辑。例如 `self.photo_explain` 不只是新增工具名，还需要目标板提供摄像头拍照、JPEG 获取和图片上行链路。
 
 ### 4.11 main/ota.cc
 
@@ -342,6 +342,14 @@ idf_component_register(SRCS ${SOURCES}
 - **`Ota::GetCheckVersionUrl()`**：当 `CONFIG_CONNECTION_TYPE_NERTC` 开启时，正式服 OTA primary 优先使用 `CONFIG_OTA_URL`；仅当该配置为空时，才回退到源码内默认地址 `https://nrtc.netease.im/v1/ota`。正式服 IP fallback 的 URL 与 `Host` 仍使用本地固定配置。
 - **OTA 返回解析**：从 OTA 响应中解析 `agent` 字段，用于更新智能体配置；同时解析 `mqtt` 字段并写入本地 Settings，供后续协议初始化和 lite 模式直连 AI 服务使用。
 - **`Ota::Upgrade()`**：使用 `GetNextSafePartition()` 替代原生的 `esp_ota_get_next_update_partition()`，确保在有 `blufi` 分区的情况下 OTA 写入正确的目标分区。
+
+`agent` 字段中与 NERTC 扩展相关的内容需要继续传递给 Application 层：
+- `agent.pipeline.interrupt_mode`：用于决定当前对话是否允许打断，并影响最终 AEC 模式。
+- `agent.netease_cloud_music.support_music`：用于判断是否初始化云音乐播放器。
+- `agent.netease_cloud_music.support_play_in_4g`：用于 4G 板型是否允许云音乐播放。
+- `agent.device_sdk_config`：需要合并到 NERTC wakeup SDK 的 `custom_config.device_sdk_config`，用于在线唤醒配置。
+
+相关字段默认值应保持保守，例如云音乐支持字段在解析前默认为 `false`，避免 OTA 失败或字段缺失时误初始化可选功能。
 
 ### 4.12 分区表文件
 
@@ -369,7 +377,7 @@ idf_component_register(SRCS ${SOURCES}
 > `server_aec` 已从 `menuconfig` 移至 `config.bin` 中的 `audio_config.server_aec` 字段配置。
 >
 > 三种 AEC 模式说明：
-> - **服务器 AEC**（`audio_config.server_aec = true`）：推送 PCM 帧，服务端处理回声，需同时推送参考帧；与 PTT 模式互斥。
+> - **服务器 AEC**（`audio_config.server_aec = true` 且 `lite_mode = false`）：推送 PCM 帧，服务端处理回声，需同时推送参考帧；与 PTT 模式互斥。当前代码会将 `server_aec && !lite_mode` 作为最终生效值。
 > - **本地设备 AEC**（`CONFIG_USE_DEVICE_AEC`）：设备本地处理，推送 OPUS 编码帧。
 > - **无 AEC**（`audio_config.server_aec = false` 且本地设备 AEC 关闭）：推送 OPUS 编码帧，无自动打断功能。
 
@@ -378,7 +386,8 @@ idf_component_register(SRCS ${SOURCES}
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `CONFIG_USE_CUSTOM_WAKE_WORD` | 视芯片而定 | 使用云信自定义唤醒词（Multinet 模型），需要 ESP32-S3/P4 + PSRAM |
-| `CONFIG_SR_MN_CN_MULTINET7_QUANT` | y | 自定义唤醒词默认使用 `mn7_cn` 模型，该配置在 `sdkconfig.defaults.esp32s3` |
+| `CONFIG_SR_MN_CN_MULTINET7_QUANT` | S3 默认 y | ESP32-S3 自定义唤醒词使用的 `mn7_cn` 模型配置，见 `sdkconfig.defaults.esp32s3` |
+| `CONFIG_SR_MN_CN_MULTINET7_AC_QUANT` | P4 默认 y | ESP32-P4 自定义唤醒词使用的 `mn7_cn` AC 模型配置，见 `sdkconfig.defaults.esp32p4` |
 
 ## 6. 本地配置文件（config.bin）
 
@@ -416,15 +425,18 @@ idf_component_register(SRCS ${SOURCES}
 | `audio_config.afe_agc.mode` | number | AFE AGC 模式，当前示例默认 `0`，对应 `AFE_AGC_MODE_WEBRTC` |
 | `audio_config.afe_agc.compression_gain_db` | number | AFE AGC 压缩增益，默认 `9` |
 | `audio_config.afe_agc.target_level_dbfs` | number | AFE AGC 目标电平，默认 `3`，表示目标约为 `-3 dBFS` |
-| `audio_config.server_aec` | boolean | 是否开启云信服务器端 AEC。该配置已从 `menuconfig` 移至 `config.bin`，默认 `false` |
+| `audio_config.server_aec` | boolean | 是否开启云信服务器端 AEC。该配置已从 `menuconfig` 移至 `config.bin`，默认 `false`；仅在 `lite_mode=false` 时生效 |
 | `license_config.license` | string | SDK 授权证书（如留空则使用服务器同步证书） |
 | `ext_net_handle` | boolean | 是否在 `nertc_init_engine` 前注入 `NeRtcExternalNetwork::GetInstance()->GetHandle()`。`config.json.s3` 默认值为 `false`；4G、ESP-Hosted、或 WiFi ABI 不兼容排查场景建议设为 `true` |
 | `ext_osal_handle` | boolean | 是否在 `nertc_init_engine` 前注入 `NeRtcExternalOsal::GetInstance()->GetHandle()`。`config.json.s3` 默认值为 `true`；当前 ESP32 示例建议保持开启 |
 | `lite_mode` | boolean | 是否开启 lite 模式。开启后设备不走 RTC 入会流程，而是基于 OTA 返回的 MQTT 参数直连 AI 服务，默认 `true` |
+| `blufi_wifi` | boolean | 是否在重新配网入口跳转到独立 BluFi App。当前仅 ESP32-S3 支持该能力；为 `true` 时需要提前烧入 `blufi_app.bin`；缺失或为 `false` 时走目标工程原有配网兜底路径 |
 
 > `audio_config.afe_agc` 主要用于使用 AFE 音频处理链路的板型做本地调参。仓库默认保持关闭；如需改善实际硬件的拾音效果，可在目标板上自行调试并重新生成、烧录 `config.bin`。
 >
 > 当 `lite_mode = true` 时，设备不走传统 RTC 入会流程，而是使用 OTA 返回的 MQTT 连接参数建立信令通道，再根据 AI 服务下发的信息建立 RTP 音频链路。
+>
+> 修改 `create_local_config/config.json.*` 后，只重新执行 `idf.py flash` 不会更新 `custom` 分区中的 `config.bin`。需要重新生成并烧录 `config.bin`，设备重启后才会读取到新的 appkey、`lite_mode`、`blufi_wifi` 等本地配置。
 
 ### 6.2 使用 config.py 生成并烧录 config.bin（推荐）
 
@@ -449,7 +461,8 @@ idf_component_register(SRCS ${SOURCES}
 
 - `ext_net_handle`：`config.json.s3` 默认是 `false`
 - `ext_osal_handle`：`config.json.s3` 默认是 `true`
-- `lite_mode`：默认 `false`
+- `lite_mode`：`config.json.s3` 默认是 `true`
+- `blufi_wifi`：仅 ESP32-S3 独立 BluFi App 使用；C3 不支持该功能，P4 当前没有对应独立程序
 
 通常建议：
 
@@ -457,19 +470,26 @@ idf_component_register(SRCS ${SOURCES}
 - 4G、ESP-Hosted，或怀疑网络 ABI 不兼容时，改为 `ext_net_handle = true`
 - `ext_osal_handle` 保持 `true`，与当前示例中的 FreeRTOS / `esp_timer` 适配保持一致
 - `audio_config.afe_agc` 默认保持关闭；如需优化不同硬件板型的拾音表现，可在目标板上自行调参后重新烧录 `config.bin`
-- 如需使用云信服务器端 AEC，请将 `audio_config.server_aec` 设为 `true`
+- 如需使用云信服务器端 AEC，请将 `audio_config.server_aec` 设为 `true`，并关闭 `lite_mode`
 - 如需使用 lite 直连 AI 服务，请将 `lite_mode` 设为 `true`，并确保 OTA 返回中包含可用的 `mqtt` 参数
+- 如需在 ESP32-S3 使用独立 BluFi App 配网，请将 `blufi_wifi` 设为 `true`，并确保已烧入 `blufi_app.bin`
 
 **Step 2：生成并烧录**
 
 ```bash
+# 仅生成 config.bin，不烧录（用于检查生成结果）
+python3 config.py --build --target esp32-s3
+
 # ESP32-S3（默认 target，可省略 --target）
 python3 config.py -p COM6 --build --flash --target esp32-s3
 
 # ESP32-C3
 python3 config.py -p COM6 --build --flash --target esp32-c3
 
-# 同时烧录蓝牙配网固件（blufi）
+# ESP32-P4（复用 config.json.s3 模板）
+python3 config.py -p COM6 --build --flash --target esp32-p4
+
+# ESP32-S3 同时烧录蓝牙配网固件（blufi）
 python3 config.py -p COM6 --build --flash --blufi --target esp32-s3
 ```
 
@@ -479,13 +499,13 @@ python3 config.py -p COM6 --build --flash --blufi --target esp32-s3
 3. 将模板配置文件复制到 `local_config/config.json`
 4. 调用 `create_local_config/spiffsgen.py` 生成 `config.bin`
 5. 调用 esptool 将 `config.bin` 烧入 `custom` 分区
-6. 若指定 `--blufi`，额外将 `third_party/blufi_app/bin/blufi_app.bin`（C3 为 `blufi_app_c3.bin`）烧入 `0x520000`
+6. 若指定 `--blufi`，额外将 ESP32-S3 的 `third_party/blufi_app/bin/blufi_app.bin` 烧入 `0x520000`
 
 > **参数说明**：
 > - `-p`：串口号（Windows 示例：`COM6`；Linux 示例：`/dev/ttyUSB0`）
 > - `--build`：生成 config.bin
 > - `--flash`：烧录 config.bin（需 `-p`）
-> - `--blufi`：同时烧录蓝牙配网固件（需 `-p`）
+> - `--blufi`：同时烧录 ESP32-S3 蓝牙配网固件（需 `-p`，C3 不支持该功能，P4 当前没有对应独立程序）
 > - `--target`：目标芯片，默认 `esp32-s3`，可选 `esp32-c3`、`esp32-p4`
 > - `-o`：自定义输出文件路径，默认 `config.bin`
 > - `-i`：自定义输入目录，默认自动从 `create_local_config/` 复制模板
@@ -512,35 +532,13 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-### 7.2 烧录本地配置与蓝牙固件（config.py）
-
-使用工程自带的 `config.py` 脚本统一处理 config.bin 生成、烧录及蓝牙配网固件烧录，脚本会自动从分区表读取偏移地址，无需手动计算。
-
-```bash
-# 1. 仅生成 config.bin，不烧录（用于检查生成结果）
-python3 config.py --build --target esp32-s3
-
-# 2. 生成并烧录 config.bin
-python3 config.py -p COM6 --build --flash --target esp32-s3
-
-# 3. 生成并烧录 config.bin，同时烧录蓝牙配网固件
-python3 config.py -p COM6 --build --flash --blufi --target esp32-s3
-
-# 4. ESP32-C3 示例
-python3 config.py -p COM6 --build --flash --blufi --target esp32-c3
-```
-
-> `config.py` 常用参数一览：
+> 如果分区表包含独立 `blufi` app 分区，构建时可能出现主固件大于 `blufi` 分区的 warning。该提示表示主固件不能写入 `blufi` 分区，不代表 `ota_0` 主固件烧录失败。NERTC 示例使用 `GetNextSafePartition()` 避免主固件 OTA 写入 `blufi`；如果目标工程保留独立 BluFi App，也需要确认 OTA 逻辑不会选择 `blufi` 作为主固件升级分区。
 >
-> | 参数 | 说明 |
-> |------|------|
-> | `-p PORT` | 串口号，Windows 如 `COM6`，Linux 如 `/dev/ttyUSB0` |
-> | `--build` | 生成 config.bin（自动从模板复制 config.json） |
-> | `--flash` | 将 config.bin 烧入 `custom` 分区（需 `-p`） |
-> | `--blufi` | 将蓝牙配网固件烧入 `blufi` 分区，地址 `0x520000`（需 `-p`） |
-> | `--target` | 目标芯片，默认 `esp32-s3`，可选 `esp32-c3`、`esp32-p4` |
-> | `-o FILE` | 自定义输出 bin 文件路径，默认 `config.bin` |
-> | `-i DIR` | 自定义输入目录，默认自动使用 `create_local_config/` 中的模板 |
+> OTA 验证时可关注日志：升级选择分区应打印 `Writing to partition ota_0 ...` 或其他主固件 OTA 分区；如果轮到 `blufi`，应出现 `ota_2(blufi) skipped, try next...`。若最终打印 `No available OTA slot`，应先调整分区表，不要让主固件写入 `blufi` 分区。
+
+### 7.2 本地配置与蓝牙固件烧录
+
+`config.bin` 和 ESP32-S3 BluFi 固件不属于主固件 `idf.py flash` 的默认烧录范围，统一使用 `config.py` 处理，具体命令见[第 6.2 节](#62-使用-configpy-生成并烧录-configbin推荐)。如果修改了 `create_local_config/config.json.*`、`lite_mode`、`blufi_wifi` 或 `appkey`，需要重新生成并烧录 `config.bin`。
 
 ---
 
@@ -558,22 +556,22 @@ python3 config.py -p COM6 --build --flash --blufi --target esp32-c3
 
 > 若沿用当前 demo 默认配置与资源，通常无需额外调整唤醒词模型。
 
-> 自定义唤醒词参考文档：待完善。如有需求，请联系技术支持。
+**接入检查点**：
+- 音频输入按 `wake_word_->GetFeedSize()` 喂给唤醒词，不要固定为 160 samples；`NertcAfeWakeWord::Feed()` 内部再调用 `nertc_wakeup_feed()` 和 `nertc_wakeup_detect()`。
+- S3/P4 上 `AudioService::SetModelsList()` 会优先检查 MultiNet 模型并创建 `NertcAfeWakeWord`；`assets.bin` 缺少 `mn7_cn` 时无法创建自定义唤醒词。
+- 如果启用了 listening/speaking 状态下的唤醒检测，`AudioService::IsAfeWakeWord()` 需要把 NERTC wakeup 也按 AFE 类唤醒词处理。
+- 传给 NERTC wakeup SDK 的 `appkey`、`deviceId`、`custom_config` 字符串需要在 SDK 使用期间保持有效。
+
+`create_local_config/config.json.*` 不需要预置顶层 `wake_words` 字段。唤醒词在线配置来自 OTA 返回的 `agent.device_sdk_config`，示例会将其合并到传给 wakeup SDK 的 `custom_config.device_sdk_config`。排查时重点看 assets 是否加载模型、是否出现 `wake word custom_config=...` / `NertcAfeWakeWord Start` 日志，以及 OTA 是否通过 `awakensEnable=false` 禁用了唤醒词创建。
 
 ### 8.2 蓝牙配网（BluFi）
 
-蓝牙配网依赖预编译的独立固件文件，烧入 `blufi` 分区（偏移 `0x520000`）：
+蓝牙配网依赖预编译的独立固件文件，烧入 `blufi` 分区（偏移 `0x520000`）。当前仅 ESP32-S3 提供该独立程序：
 - **ESP32-S3**：`third_party/blufi_app/bin/blufi_app.bin`
-- **ESP32-C3**：`third_party/blufi_app/bin/blufi_app_c3.bin`
 
-**烧录蓝牙固件**：使用 `config.py` 的 `--blufi` 参数一并烧录，无需单独操作：
+运行时是否跳转独立 BluFi App 由 `config.json` 中的 `blufi_wifi` 字段控制。`blufi_wifi=true` 时，重新配网入口会调用 `Board::StartBlufiMode()` 跳转到 `blufi` 分区；缺失或为 `false` 时应保留目标工程原有配网流程作为兜底。C3 不支持该功能，P4 当前没有对应独立程序。
 
-```bash
-# 同时生成 config.bin、烧录 config.bin 和蓝牙配网固件
-python3 config.py -p COM6 --build --flash --blufi --target esp32-s3
-```
-
-若只需单独烧录蓝牙固件（不更新 config.bin）：
+配置与 BluFi 固件可以在生成 `config.bin` 时通过 `--blufi` 一并烧录，命令见[第 6.2 节](#62-使用-configpy-生成并烧录-configbin推荐)。若只需单独烧录蓝牙固件（不更新 config.bin）：
 
 ```bash
 python3 config.py -p COM6 --blufi --target esp32-s3
@@ -583,20 +581,35 @@ python3 config.py -p COM6 --blufi --target esp32-s3
 
 ### 8.3 云音乐播放
 
-云音乐功能需要以下前提条件全部满足：
-- 后台智能体已配置并启用云音乐 MCP 服务。
-- `menuconfig` 中开启 `CONFIG_USE_MUSIC_PLAYER`（仅 ESP32-S3/P4 + PSRAM）。
-- OTA 同步返回中包含云音乐权限字段，且后台已开启该设备的云音乐访问权限。
+云音乐功能需要同时满足三类条件：后台智能体已配置并启用云音乐 MCP 服务；`menuconfig` 开启 `CONFIG_USE_MUSIC_PLAYER`（仅 ESP32-S3/P4 + PSRAM）；OTA 返回允许该设备使用云音乐。示例中的初始化条件如下，4G 板型需要额外允许蜂窝网络播放：
 
-服务器通过 `updateSongList` JSON 指令下发歌单，设备收到后更新本地播放列表并开始播放。参考接入官方文档：https://doc.yunxin.163.com/emotional-ai/guide/jE5NDExNzc?platform=client，注意当前版本已经废弃了music_player_api.h和music_player_api.c 文件。
+```cpp
+ota_->GetSupportAirMusicPlayer() &&
+(Board::GetInstance().GetBoardType() != "ml307" || ota_->GetSupportAirMusicIn4G())
+```
 
-**稳定性说明**：
-- 当前示例已增加连续 MP3 解码失败保护；当异常流导致连续解码失败达到阈值时，播放器会进入 `ERROR` 状态并主动停播，避免长时间卡死。
-- 当前示例已将流式播放相关线程栈提高到 `16KB`。如果你在自己的工程中裁剪或移植云音乐播放器逻辑，建议保留等价的线程栈和错误退出保护。
+对应 OTA 字段为 `agent.netease_cloud_music.support_music` 和 `agent.netease_cloud_music.support_play_in_4g`。如果 OTA 请求失败、字段缺失或字段不是 bool，示例保持默认 `false`，不会初始化云音乐播放器。
 
-### 8.4 4G 模组接入（esp-ml307）
+服务器通过 `updateSongList` JSON 指令下发歌单，设备收到后更新本地播放列表并开始播放。参考接入官方文档：https://doc.yunxin.163.com/emotional-ai/guide/jE5NDExNzc?platform=client，注意当前版本已经废弃 `music_player_api.h` 和 `music_player_api.c` 文件。
 
-#### 8.4.1 概述
+云音乐播放中需要能被用户交互打断。示例在按键进入对话和唤醒词命中入口都会调用 `MusicPlayer::GetInstance().InterruptPlay()`；目标工程如果改写了按键或唤醒入口，需要保留等价打断逻辑。当前示例还包含连续 MP3 解码失败保护，并将流式播放相关线程栈提高到 `16KB`；裁剪或移植播放器逻辑时建议保留等价保护。
+
+### 8.4 拍照识别
+
+拍照识别依赖 `self.photo_explain` MCP Tool、Application 图片上行逻辑和板级 Camera 实现共同完成。只注册 MCP Tool 不足以让该能力工作。
+
+参考流程：
+
+1. `self.photo_explain` 触发 `Application::PhotoExplain()`。
+2. 本地摄像头路径会调用 `Camera::Capture()`，再通过 `Camera::GetCapturedJpeg(uint8_t*& data, size_t& len)` 取得 JPEG 数据。
+3. Application 将 JPEG 编码成 `data:image/jpeg;base64,...`，再调用 `protocol_->SendLlmImage(..., img_type=0)` 发送给 NERTC AI。
+4. 网络图片路径调用 `SendLlmImage(..., img_type=1)`，用于 URL 图片示例，不代表本地摄像头拍照。
+
+如果目标板使用 `esp32-camera` 旧驱动，可参考示例中的 `Esp32CameraLegacy` 封装；如果目标工程已有自己的 `Camera` 实现，需要确认它已经实现 `GetCapturedJpeg()`。接入后还需要关注 PSRAM 占用，JPEG buffer 和 base64 buffer 会额外占用内存，必要时降低分辨率或 JPEG 质量。
+
+### 8.5 4G 模组接入（esp-ml307）
+
+#### 8.5.1 概述
 
 `components/esp-ml307` 是本项目独立维护的 4G 模组网络库，支持通过 AT 命令驱动以下模组：
 
@@ -608,7 +621,7 @@ python3 config.py -p COM6 --blufi --target esp32-s3
 
 提供的协议支持：HTTP/HTTPS、MQTT/MQTTS、TCP/SSL TCP、UDP、WebSocket。
 
-#### 8.4.2 两种引入方式
+#### 8.5.2 两种引入方式
 
 **方式一：使用本项目本地维护版本（推荐）**
 
@@ -626,7 +639,7 @@ dependencies:
 
 > 上游版本（`78/esp-ml307`）是社区公开版本，本项目本地修复不一定已合并回上游，使用上游版本时需自行评估稳定性。
 
-#### 8.4.3 使用建议
+#### 8.5.3 使用建议
 
 > **用户有自己稳定的网络库版本时，应优先使用自己工程的网络库**，无需引入 `components/esp-ml307`。
 
@@ -638,7 +651,7 @@ dependencies:
 | 接入新模组或新功能 | 参考已有模组的实现模式（ML307/EC801E 并列实现） |
 | 还没有自己的网络库 | 可直接使用 `components/esp-ml307` 作为起点，按需修改 |
 
-#### 8.4.4 本地版本的重要修复
+#### 8.5.4 本地版本的重要修复
 
 本地维护版本相对上游做了以下关键修复，自研网络库遇到类似问题可参考对应文件：
 
@@ -649,7 +662,7 @@ dependencies:
 | TCP 断开回调重入及 use-after-free：用原子 `callback_called_` 保证回调只触发一次；`HttpClient::Close()` 始终调用 `Disconnect()` 等待 `ReceiveTask` 退出；重新连接前清空旧连接的回调 | `src/esp/esp_tcp.cc`、`src/http_client.cc` |
 | ML307 HTTP 连接关闭时 connect ID 未重置，影响连接复用 | `src/ml307/ml307_http.cc` |
 
-#### 8.4.5 与 NERtc 的衔接
+#### 8.5.5 与 NERtc 的衔接
 
 使用 4G 模组时，需通过 `nertc_external_network.cc` 将 `esp-ml307` 的网络能力桥接给 NERtc SDK（详见[第 4.5.3 节](#453-nertc_external_networkcc)）。`components/esp-ml307` 中的 `NetworkInterface` 抽象基类与 `NeRtcExternalNetwork` 的外部 handle 设计一致，可直接对接。对当前示例工程而言，推荐直接在 `config.json` 中将 `ext_net_handle` 设为 `true`。
 
@@ -660,15 +673,15 @@ engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
 
 `NeRtcExternalNetwork` 内部的 HTTP、TCP、UDP、MQTT 实现，可参照 `components/esp-ml307/src/ml307/` 下对应文件（`ml307_http.cc`、`ml307_tcp.cc` 等）进行适配。
 
-### 8.5 ESP32-P4 + ESP-Hosted 仆从芯片网络接入
+### 8.6 ESP32-P4 + ESP-Hosted 仆从芯片网络接入
 
-#### 8.5.1 适用场景
+#### 8.6.1 适用场景
 
 **ESP32-P4 无内置 WiFi/BT**，需要外挂一颗 ESP32 模组（如 ESP32-C6、ESP32-S3）作为仆从芯片（Slave）提供 WiFi 网络能力。仆从芯片通过 SPI 或 SDIO 与 P4 通信，运行 esp-hosted slave 固件后，P4 侧通过 esp-hosted host 驱动访问网络。
 
 > 与 4G 模组方案的区别：同为"外部网络"，4G 模组走 AT 命令 + 蜂窝网，esp-hosted 走 SPI/SDIO + WiFi（仆从 ESP32）。NERtc 侧的桥接方式完全相同，均通过 `ext_net_handle`。
 
-#### 8.5.2 仆从芯片固件
+#### 8.6.2 仆从芯片固件
 
 仆从 ESP32 需烧录 esp-hosted slave 固件，固件源码及烧录说明见官方仓库：
 
@@ -684,7 +697,7 @@ idf.py set-target esp32c6
 idf.py -DCONFIG_ESP_SPI_HOST_INTERFACE=y build flash
 ```
 
-#### 8.5.3 主控（P4）侧适配
+#### 8.6.3 主控（P4）侧适配
 
 P4 侧需在工程中集成 esp-hosted host 驱动，并将其网络能力桥接给 NERtc SDK，方式与 4G 模组完全一致。对当前示例工程而言，推荐直接在 `config.json` 中将 `ext_net_handle` 设为 `true`：
 
@@ -693,11 +706,11 @@ P4 侧需在工程中集成 esp-hosted host 驱动，并将其网络能力桥接
 engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
 ```
 
-`nertc_external_network.cc` 中 HTTP、TCP、UDP、MQTT 的底层实现，需替换为调用 esp-hosted host 侧提供的 socket API（esp-hosted host 驱动在 P4 上注册标准 netif，可直接使用 lwIP socket，**无需额外适配**）。
+`nertc_external_network.cc` 中 HTTP、TCP、UDP、MQTT 的底层实现需要走 P4 工程可用的网络接口。esp-hosted host 驱动会在 P4 上注册标准 netif，因此通常可以继续使用 lwIP socket 实现，不需要像 4G AT 模组那样重写一套 HTTP/TCP/UDP/MQTT。
 
-> **与 4G 模组的关键区别**：4G 模组的 AT 命令接口无法直接使用 lwIP socket，因此 `esp-ml307` 需要完整实现 HTTP/TCP/UDP/MQTT；而 esp-hosted host 驱动注册了标准 netif，P4 上可直接使用 lwIP socket，`NeRtcExternalNetwork` 中的 WiFi 默认实现（即 `ext_net_handle = nullptr` 的内置路径）理论上可复用，但为确保 ABI 一致性，**建议始终显式设置 `ext_net_handle`**（参见 [第 4.5.3 节](#453-nertc_external_networkcc) 的开关说明）。
+> **与 4G 模组的关键区别**：4G 模组的 AT 命令接口无法直接使用 lwIP socket，因此 `esp-ml307` 需要完整实现 HTTP/TCP/UDP/MQTT；esp-hosted host 则提供标准 netif，外部网络 handle 的实现可复用 lwIP socket 路径。设置 `ext_net_handle=true` 的重点不是更换网络协议，而是避免 SDK 预编译内置网络栈与 P4 工程运行环境不一致。
 
-#### 8.5.4 与其他方案对比
+#### 8.6.4 与其他方案对比
 
 | 维度 | WiFi（S3 内置） | 4G 模组（ML307） | ESP-Hosted（P4 专用） |
 |------|----------------|-----------------|----------------------|
@@ -705,22 +718,25 @@ engine_config.ext_net_handle = NeRtcExternalNetwork::GetInstance()->GetHandle();
 | 网络介质 | 内置 WiFi | 蜂窝 Cat.1 | WiFi（仆从 ESP32） |
 | 主控↔网络接口 | 内置 | UART AT 命令 | SPI / SDIO |
 | 仆从固件 | 无 | 模组出厂固件 | esp-hosted slave |
-| NERtc 桥接 | 可不设置 handle | 必须设置 handle | 建议设置 handle |
+| NERtc 桥接 | 可不设置 handle | 必须设置 handle | 建议设置 handle；实现通常可复用 lwIP socket |
 | 参考实现 | — | `components/esp-ml307` | https://github.com/espressif/esp-hosted |
 
 ## 附录：常见问题
 
 **Q：IDF 5.5 编译报 `touch_element` 相关错误？**
-A：`touch_element` 在 IDF 5.5.2 中被移除，已通过 `idf_component.yml` 条件依赖处理。请确认使用的是最新的 `idf_component.yml`，并运行 `idf.py update-dependencies`。
+A：先确认 `main/idf_component.yml` 的 IDF 版本条件与当前工程匹配，并运行 `idf.py update-dependencies`。如果目标板自己的代码直接包含 `touch_element/touch_button.h`，还需要按目标 IDF 版本评估板级触摸实现是否要替换或条件编译。
 
 **Q：OTA 升级后设备进入 blufi 分区而非主程序？**
-A：请确认 `ota.cc` 中使用了 `GetNextSafePartition()` 而非默认的 `esp_ota_get_next_update_partition()`，后者可能在存在 `blufi` 分区时选错目标分区。
+A：检查 `ota.cc` 是否使用 `GetNextSafePartition()`，并确认 OTA 日志写入的是 `ota_0` 或其他主固件 OTA 分区。`blufi` 只用于独立 BluFi App，不应承载主固件 OTA；分区和日志检查点见[第 7.1 节](#71-固件构建与烧录)。
 
 **Q：config.bin 烧录后 appkey 未生效？**
 A：检查 `config.json` 格式是否合法（标准 JSON，无注释），以及烧录地址是否与分区表中 `custom` 分区的 Offset 一致。可通过串口日志中的 `local config set appkey to ...` 确认是否读取成功。
 
+**Q：自定义唤醒词不生效但编译通过？**
+A：先确认 `sdkconfig.defaults.esp32s3` / `sdkconfig.defaults.esp32p4` 中启用了对应 MultiNet7 配置，并确认 `assets.bin` 包含模型资源。运行时重点看 `NertcAfeWakeWord Start`、`wake word custom_config=...` 以及 OTA 是否下发 `agent.device_sdk_config.awakensEnable=false`；更多检查点见[第 8.1 节](#81-自定义唤醒词)。
+
 **Q：Server AEC 和本地 AEC 能同时开启吗？**
-A：不能。两者互斥，`CONFIG_USE_NERTC_SERVER_AEC` 和 `CONFIG_USE_DEVICE_AEC` 不能同时为 `y`。PTT 模式开启时两种 AEC 均不可用。
+A：不能。本地 AEC 由 `CONFIG_USE_DEVICE_AEC` 控制，Server AEC 由 `config.bin` 中的 `audio_config.server_aec` 控制；两者应只选择一种。PTT 模式开启时不能使用 AEC；`lite_mode=true` 时 `audio_config.server_aec` 不生效。
 
 **Q：WiFi 方案下 SDK 连接失败或崩溃在网络调用栈中？**
 A：大概率是 SDK 预编译库的 IDF 版本与用户工程不一致，导致内置网络栈 ABI 不兼容。解决方法：将 `config.json` 中的 `ext_net_handle` 改为 `true`，让 SDK 使用应用侧编译的网络实现：

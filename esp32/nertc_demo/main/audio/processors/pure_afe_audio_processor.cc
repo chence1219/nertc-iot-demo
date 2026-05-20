@@ -220,7 +220,7 @@ void PureAfeAudioProcessor::CheckAfeFeedCanBeDone() {
         input_buffer_.erase(input_buffer_.begin(), input_buffer_.begin() + frame_samples_);
     }
     if(reference_buffer_.size() > 10 * feed_size) {
-        ESP_LOGW(TAG, "Reference buffer overflow after feed, drop data");
+        ESP_LOGD(TAG, "Reference buffer overflow after feed, drop data");
         reference_buffer_.clear();
     }
 }
