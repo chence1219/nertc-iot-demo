@@ -28,7 +28,8 @@ typedef enum {
 } nertc_sdk_log_level_e;
 
 typedef enum {
-  NERTC_SDK_ENGINE_MODE_AI = 0,
+  NERTC_SDK_ENGINE_MODE_NORMAL = 0,
+  NERTC_SDK_ENGINE_MODE_AI = 0,  // deprecated
   NERTC_SDK_ENGINE_MODE_PTT = 1,
   NERTC_SDK_ENGINE_MODE_LITE = 2,
 } nertc_sdk_engine_mode_e;

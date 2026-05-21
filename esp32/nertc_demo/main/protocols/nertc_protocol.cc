@@ -171,7 +171,7 @@ NeRtcProtocol::NeRtcProtocol() {
 #if CONFIG_USE_NERTC_PTT_MODE
     engine_config.engine_mode = NERTC_SDK_ENGINE_MODE_PTT;
 #else
-    engine_config.engine_mode = lite_mode_ ? NERTC_SDK_ENGINE_MODE_LITE : NERTC_SDK_ENGINE_MODE_AI;
+    engine_config.engine_mode = lite_mode_ ? NERTC_SDK_ENGINE_MODE_LITE : NERTC_SDK_ENGINE_MODE_NORMAL;
 #endif
     // feature配置
     engine_config.feature_config.enable_mcp_server = true;

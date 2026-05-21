@@ -193,6 +193,14 @@ if (use_ext_osal_handle) {
 
 也就是说，示例工程中是否启用外部网络 / 外部 OSAL，不再由示例代码写死，而是由 `create_local_config/config.json.s3`（或 `config.json.c3`）里的布尔开关决定。
 
+```cpp
+engine_config.engine_mode = lite_mode_ ? NERTC_SDK_ENGINE_MODE_LITE : NERTC_SDK_ENGINE_MODE_NORMAL;
+```
+
+`engine_mode` 用于指定 SDK 引擎的模式，可选值：`NERTC_SDK_ENGINE_MODE_LITE`、`NERTC_SDK_ENGINE_MODE_NORMAL`。
+`NERTC_SDK_ENGINE_MODE_NORMAL` 模式下，SDK 具备 AI 对话与音视频通话的全部能力，能实现打电话及 RTC 通话。
+`NERTC_SDK_ENGINE_MODE_LITE` 模式下，需要在协议初始化前使用云信 OTA 返回的 `mqtt` 参数完成相关初始化，主要用于低延迟 AI 对话场景，不支持打电话及 RTC 通话。
+
 #### 4.5.3 `nertc_external_network.cc`
 
 `NeRtcExternalNetwork` 是外部网络抽象层，封装了 HTTP、TCP、UDP、MQTT 的具体实现，并通过函数指针表（`ext_net_handle`）暴露给 NERtc SDK。SDK 收到该 handle 后，会将所有网络 I/O 委托给应用侧提供的实现，**完全绕过 SDK 内置的网络栈**。
