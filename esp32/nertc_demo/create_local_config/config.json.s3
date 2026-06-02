@@ -9,9 +9,6 @@
 		},
 		"server_aec": false
 	},
-	"license_config": {
-		"license": ""
-	},
 	"ext_net_handle": false,
 	"ext_osal_handle": true,
 	"lite_mode": true,

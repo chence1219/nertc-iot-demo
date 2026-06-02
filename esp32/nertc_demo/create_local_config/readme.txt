@@ -3,9 +3,6 @@ example:
 	"audio_config": { // 音频编解码相关的配置
 		"frame_size": 20
 	},
-	"license_config": { // 证书配置
-		"license": ""
-	},
 	"wake_words": [ //唤醒配置
 		"ni hao chong chong",
 		"ni hao dan zai"

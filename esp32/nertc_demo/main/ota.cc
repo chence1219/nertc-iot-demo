@@ -805,6 +805,9 @@ esp_err_t Ota::CheckVersion() {
     }
 
     has_new_version_ = false;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    firmware_md5_.clear();
+#endif
     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
     if (cJSON_IsObject(firmware)) {
         cJSON *version = cJSON_GetObjectItem(firmware, "version");
@@ -815,6 +818,12 @@ esp_err_t Ota::CheckVersion() {
         if (cJSON_IsString(url)) {
             firmware_url_ = url->valuestring;
         }
+#if CONFIG_CONNECTION_TYPE_NERTC
+        cJSON *md5 = cJSON_GetObjectItem(firmware, "md5");
+        if (cJSON_IsString(md5)) {
+            firmware_md5_ = md5->valuestring;
+        }
+#endif
 
         if (cJSON_IsString(version) && cJSON_IsString(url)) {
             // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
@@ -896,6 +905,32 @@ void Ota::MarkCurrentVersionValid() {
 
 bool GetNextSafePartition(const esp_partition_t **out)
 {
+#if CONFIG_CONNECTION_TYPE_NERTC
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *first_candidate = esp_ota_get_next_update_partition(NULL);
+    const esp_partition_t *p = first_candidate;
+    while (p != nullptr) {
+        if (strcmp(p->label, "blufi") == 0) {
+            ESP_LOGW(TAG, "Skipping blufi partition for main firmware OTA");
+            p = esp_ota_get_next_update_partition(p);
+            if (p == first_candidate) {
+                break;
+            }
+            continue;
+        }
+        if (running != nullptr && p->address == running->address) {
+            ESP_LOGW(TAG, "Skipping running partition %s for OTA", p->label);
+            p = esp_ota_get_next_update_partition(p);
+            if (p == first_candidate) {
+                break;
+            }
+            continue;
+        }
+        *out = p;
+        return true;
+    }
+    return false;
+#else
     const esp_partition_t *p = esp_ota_get_next_update_partition(NULL); // 第一候选
     if (p == nullptr) return false;
 
@@ -907,6 +942,7 @@ bool GetNextSafePartition(const esp_partition_t **out)
     }
     *out = p;
     return true;
+#endif
 }
 
 bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {

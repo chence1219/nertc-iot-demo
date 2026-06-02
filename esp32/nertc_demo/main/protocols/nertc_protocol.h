@@ -24,7 +24,6 @@ struct NeRtcLocalConfig {
     bool valid = false;
     std::string appkey;
     std::string custom_config_string;
-    std::string license;
     std::string cname;
     uint64_t uid = 0;
     bool has_uid = false;
@@ -66,7 +65,6 @@ public:
     static void CopyJsonObjectString(cJSON* object, std::string& value);
     
 private:
-    void RequestChecksum(std::string& checksum);
     void ParseFunctionCall(cJSON* data, std::string& arguments, std::string& name);
 
     cJSON* BuildApplicationAsrProtocol(bool local_user ,const char* text);
