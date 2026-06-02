@@ -23,11 +23,8 @@
 #define TAG "NeRtcProtocol"
 
 #define UID 6669
-#define USE_SAFE_MODE 0
 #define JOIN_EVENT (1 << 0)
 #define START_AI_EVENT (1 << 1)
-
-#define NERTC_DEFAULT_TEST_LICENSE "eyJhbGdvcml0aG0iOiJkZWZhdWx0IiwiY3JlZGVudGlhbCI6eyJhY3RpdmF0ZURhdGUiOjE3NTkxMjAyMTQsImV4cGlyZURhdGUiOjE3OTMyNDgyMTQsImxpY2Vuc2VLZXkiOiJ5dW54aW5Db21tb25UZXN0Iiwibm9uY2UiOiJQLW85S3o5RTI2WSJ9LCJzaWduYXR1cmUiOiJFcUt4c2s5TTFNWGp2dWE5Z3J4MGVYVkxxdHBrMm5aWUoyMHNIM0x4LzVMT0tFL3BOTktadDdmNG04eVE5ZWFIQmxHS2NaYUdmaVlNeTdtZ1pYTjVLVFRvZzk2K2RYZmhuZ1N4UG9YUDZBUkNHdHlmZ1N1SDFtbGlxYUYyNWVrWVlRQzUwV3V5ZHFMRzJyaDB1cVhrR05oSkhtVWtRdnVndU1sVlZjc2JLelRCNGRubmtzVVhOcm12aEZXQS9IUTNqd0kyYmFaOTNlMzM4UkFjYTRlVHBTeUhkb1EzRlNGVkpxUXBWRHlJVXhOb21ORXhJT1Z2bzN5dkdRcERLTldjVUFFejFQN1R0Z3ozS1U4RnZYT09sRXNPTU5UYzRxdU9JSWp1SWNRaE1aK2FrSHlDRURHSE04TUthYkdTU2JZOXN1NWVwdjZEZUZxWjEza29wK1pHK2c9PSIsInZlcnNpb24iOiIxLjAifQ=="
 
 static const char* const RTC_CALL_STATE_STRINGS[] = {
     "idle",
@@ -50,7 +47,6 @@ NeRtcProtocol::NeRtcProtocol() {
     ESP_LOGI(TAG, "Start create: Free: %u minimal: %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
 
     int local_frame_duration_config = 0;
-    std::string local_license_config;
     std::string custom_config_string;
     bool use_ext_net_handle = false;
     bool use_ext_osal_handle = false;
@@ -64,7 +60,6 @@ NeRtcProtocol::NeRtcProtocol() {
         lite_mode_ = local_config.lite_mode;
         nertc_server_aec_ = local_config.effective_nertc_server_aec;
         local_frame_duration_config = local_config.frame_size_ms;
-        local_license_config = local_config.license;
         use_ext_net_handle = local_config.ext_net_handle;
         use_ext_osal_handle = local_config.ext_osal_handle;
 
@@ -80,9 +75,6 @@ NeRtcProtocol::NeRtcProtocol() {
             ESP_LOGI(TAG, "local config set frame size to %d ms", local_frame_duration_config);
         }
         ESP_LOGI(TAG, "local config set nertc_server_aec to %d", nertc_server_aec_ ? 1 : 0);
-        if (!local_license_config.empty()) {
-            ESP_LOGI(TAG, "local license config, size: %d", local_license_config.size());
-        }
         ESP_LOGI(TAG, "local config set ext_net_handle to %d", use_ext_net_handle ? 1 : 0);
         ESP_LOGI(TAG, "local config set ext_osal_handle to %d", use_ext_osal_handle ? 1 : 0);
         ESP_LOGI(TAG, "local config set lite_mode to %d", lite_mode_ ? 1 : 0);
@@ -99,7 +91,6 @@ NeRtcProtocol::NeRtcProtocol() {
     nertc_sdk_configuration_init(&sdk_config);
     sdk_config.app_key = local_config_appkey_.c_str();
     sdk_config.device_id = device_id.c_str();
-    sdk_config.force_unsafe_mode = true;
 
     // 音频配置
     //如果打开服务端aec，这3个参数会由sdk内部控制
@@ -149,9 +140,6 @@ NeRtcProtocol::NeRtcProtocol() {
 
     // 日志配置
     sdk_config.log_cfg.log_level = NERTC_SDK_LOG_INFO;
-
-    // License配置
-    sdk_config.licence_cfg.license = local_license_config.empty() ? NERTC_DEFAULT_TEST_LICENSE : local_license_config.c_str();
 
     ESP_LOGI(TAG, "Start set nertc sdk handler: Free: %u minimal: %u",
             heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -270,18 +258,6 @@ bool NeRtcProtocol::Start() {
 
     join_.store(false);
 
-    // get checksum
-    std::string checksum;
-#if USE_SAFE_MODE
-    if (!lite_mode_) {
-        RequestChecksum(checksum);
-        if (checksum.empty()) {
-            ESP_LOGE(TAG, "Failed to get checksum");
-            return false;
-        }
-    }
-#endif
-
     // join room
     uint64_t uid = UID;
 #if NERTC_ENABLE_CONFIG_FILE
@@ -300,7 +276,7 @@ bool NeRtcProtocol::Start() {
         cname_ = std::string("80") + std::to_string(random_num);
     }
     ESP_LOGI(TAG, "Join cname = %s", cname_.c_str());
-    auto ret = nertc_join(engine_, cname_.c_str(), checksum.c_str(), uid);
+    auto ret = nertc_join(engine_, cname_.c_str(), nullptr, uid);
     if (ret != 0) {
         ESP_LOGE(TAG, "Join failed, error: %d", ret);
         return false;
@@ -341,7 +317,7 @@ bool NeRtcProtocol::OpenAudioChannel() {
     }
 
     // 等待服务器响应
-    EventBits_t bits = xEventGroupWaitBits(event_group_, START_AI_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(5000));
+    EventBits_t bits = xEventGroupWaitBits(event_group_, START_AI_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
     if (!(bits & START_AI_EVENT)) {
         ESP_LOGE(TAG, "start ai timeout");
         return false;
@@ -468,59 +444,6 @@ void NeRtcProtocol::SetAISleep() {
         ESP_LOGE(TAG, "SetAISleep: start CloseAudioChannel_timer fail err: %s", esp_err_to_name(err));
         CloseAudioChannel();
     }
-}
-
-void NeRtcProtocol::RequestChecksum(std::string& checksum) {
-    std::ostringstream post_body;
-    post_body << "uid=" << UID
-              << "&appkey=" << local_config_appkey_
-              << "&curtime=" << time(NULL);
-    std::string post_str = post_body.str();
-
-    auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(0);
-    http->SetHeader("Content-Type", "application/x-www-form-urlencoded");
-    http->SetContent(std::move(post_str));
-    if (!http->Open("POST", "http://webtest.netease.im/nrtcproxy/demo/getChecksum.action")) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection");
-        return;
-    }
-
-    auto response = http->ReadAll();
-    http->Close();
-
-    cJSON* root = cJSON_Parse(response.c_str());
-    if (root == nullptr) {
-        ESP_LOGE(TAG, "Failed to parse JSON response: %s", response.c_str());
-        return;
-    }
-
-    cJSON* code_item = cJSON_GetObjectItem(root, "code");
-    if (!code_item || !cJSON_IsNumber(code_item)) {
-        ESP_LOGE(TAG, "Missing or invalid code in response");
-        cJSON_Delete(root);
-        return;
-    }
-    int code = code_item->valueint;
-    if (code != 200) {
-        cJSON* msg_item = cJSON_GetObjectItem(root, "msg");
-        std::string error_msg = msg_item && cJSON_IsString(msg_item) ?
-                            msg_item->valuestring : "Unknown error";
-        ESP_LOGE(TAG, "Request failed with code: %d, msg: %s",
-                code, error_msg.c_str());
-        cJSON_Delete(root);
-        return;
-    }
-
-    cJSON* token_item = cJSON_GetObjectItem(root, "checksum");
-    if (!token_item || !cJSON_IsString(token_item)) {
-        ESP_LOGE(TAG, "Missing or invalid token in response");
-        cJSON_Delete(root);
-        return;
-    }
-
-    checksum = token_item->valuestring;
-    cJSON_Delete(root);
 }
 
 void NeRtcProtocol::ParseFunctionCall(cJSON* data, std::string& arguments, std::string& name) {
@@ -706,7 +629,7 @@ void NeRtcProtocol::OnDisconnect(const nertc_sdk_callback_context_t* ctx, nertc_
 
     instance->CloseAudioChannel();
     instance->join_.store(false);
-    ESP_LOGI(TAG, "Stop for receive OnDisconnect, please restart later");
+    ESP_LOGI(TAG, "OnDisconnect: code=%d reason=%d, cleanup done", code, reason);
 }
 
 void NeRtcProtocol::OnUserJoined(const nertc_sdk_callback_context_t* ctx, const nertc_sdk_user_info* user) {
@@ -1261,11 +1184,6 @@ bool NeRtcProtocol::LoadLocalConfig(NeRtcLocalConfig& config) {
     }
     if (!has_server_aec && cJSON_IsObject(custom_config)) {
         ReadJsonBool(custom_config, "nertc_server_aec", loaded_config.nertc_server_aec);
-    }
-
-    cJSON* license_config = cJSON_GetObjectItem(config_json, "license_config");
-    if (cJSON_IsObject(license_config)) {
-        ReadJsonString(license_config, "license", loaded_config.license);
     }
 
     loaded_config.effective_nertc_server_aec = loaded_config.nertc_server_aec && !loaded_config.lite_mode;

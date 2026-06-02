@@ -29,7 +29,7 @@ typedef enum {
 
 typedef enum {
   NERTC_SDK_ENGINE_MODE_NORMAL = 0,
-  NERTC_SDK_ENGINE_MODE_AI = 0,  // deprecated
+  NERTC_SDK_ENGINE_MODE_AI = 0,     //deprecated
   NERTC_SDK_ENGINE_MODE_PTT = 1,
   NERTC_SDK_ENGINE_MODE_LITE = 2,
 } nertc_sdk_engine_mode_e;
@@ -132,12 +132,12 @@ typedef struct nertc_sdk_mqtt_config {
 
 typedef struct nertc_sdk_configuration {
   const char* app_key;    /**< 应用的AppKey */
-  const char* device_id;  /**< 设备ID */
-  bool force_unsafe_mode; /**< 是否强制使用非安全模式. true: 在调用 nertc_join
-                             接口时允许传递空的token，但有可能会出现串房间的问题; false: 在调用 nertc_join
-                             接口时不允许传递空的token，否则会加入房间失败（除非后台针对app key 开启了非安全模式） */
+  const char* device_id;  /**< 设备ID。AI 场景下需要后台根据 app_key 激活并绑定智能体，
+                             可作为 licence_cfg.license 为空时的鉴权身份 */
+  bool force_unsafe_mode; /**< AI 场景建议设置为 true。设置为 true 时 nertc_join 的 token 参数可传空 */
 
-  nertc_sdk_licence_config_t licence_cfg;             /**< licence 配置 */
+  nertc_sdk_licence_config_t licence_cfg;             /**< licence 配置。AI 场景 device_id 激活模式下默认填空，
+                                                         如传入旧版 license 则继续兼容既有流程 */
   nertc_sdk_audio_config_t audio_config;              /**< 走设备本地 AEC 时的音频配置 */
   nertc_sdk_optional_configuration_t optional_config; /**< 可选功能配置 */
   nertc_sdk_mqtt_config_t mqtt_config;                /**< MQTT 配置 */

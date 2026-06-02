@@ -14,7 +14,11 @@
 #include "settings.h"
 
 #include <cstring>
+#include <string>
 #include <esp_log.h>
+#if CONFIG_CONNECTION_TYPE_NERTC
+#include <esp_partition.h>
+#endif
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
@@ -534,9 +538,37 @@ void Application::CheckNewVersion() {
         retry_delay = initial_retry_delay;
 
         if (ota_->HasNewVersion()) {
+#if CONFIG_CONNECTION_TYPE_NERTC
+            bool use_main_ota = true;
+            const auto& firmware_url = ota_->GetFirmwareUrl();
+            const auto& firmware_version = ota_->GetFirmwareVersion();
+            const auto& firmware_md5 = ota_->GetFirmwareMd5();
+            const esp_partition_t* blufi_partition = esp_partition_find_first(
+                ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, "blufi");
+            if (blufi_partition != nullptr) {
+                if (!firmware_url.empty() && !firmware_version.empty() && !firmware_md5.empty()) {
+                    ESP_LOGI(TAG,
+                             "Starting BluFi OTA mode, version=%s, md5=%s",
+                             firmware_version.c_str(),
+                             firmware_md5.c_str());
+                    board.StartBlufiOtaMode(firmware_url, firmware_version, firmware_md5);
+                    return;
+                }
+                ESP_LOGE(TAG,
+                         "BluFi OTA response is incomplete (url_empty=%d, version_empty=%d, md5_empty=%d)",
+                         firmware_url.empty(),
+                         firmware_version.empty(),
+                         firmware_md5.empty());
+                use_main_ota = false;
+            }
+            if (use_main_ota && UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
+                return; // This line will never be reached after reboot
+            }
+#else
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
                 return; // This line will never be reached after reboot
             }
+#endif
             // If upgrade failed, continue to normal operation
         }
 
@@ -652,6 +684,38 @@ void Application::InitializeProtocol() {
 #if CONFIG_CONNECTION_TYPE_NERTC
                 current_pedding_speaking_.store(true);
 #endif
+                int64_t tts_start_recv_timestamp_ms = esp_timer_get_time() / 1000;
+                if (ai_sentence_start_recv_timestamp_ms_ > 0) {
+                    auto sentence_start_recv_ms = std::to_string(ai_sentence_start_recv_timestamp_ms_);
+                    auto tts_start_recv_ms = std::to_string(tts_start_recv_timestamp_ms);
+                    auto delay_ms = std::to_string(tts_start_recv_timestamp_ms - ai_sentence_start_recv_timestamp_ms_);
+                    ESP_LOGI(TAG,
+                             "[AI_LATENCY] sentence_start_recv_ms=%s tts_start_recv_ms=%s delay_ms=%s",
+                             sentence_start_recv_ms.c_str(),
+                             tts_start_recv_ms.c_str(),
+                             delay_ms.c_str());
+                    ai_sentence_start_recv_timestamp_ms_ = 0;
+                } else {
+                    ESP_LOGW(TAG,
+                             "[AI_LATENCY] missing sentence_start before tts_start, tts_start_recv_ms=%lld",
+                             tts_start_recv_timestamp_ms);
+                }
+
+                if (ai_stt_recv_timestamp_ms_ > 0) {
+                    auto stt_recv_ms = std::to_string(ai_stt_recv_timestamp_ms_);
+                    auto tts_start_recv_ms = std::to_string(tts_start_recv_timestamp_ms);
+                    auto delay_ms = std::to_string(tts_start_recv_timestamp_ms - ai_stt_recv_timestamp_ms_);
+                    ESP_LOGI(TAG,
+                             "[AI_LATENCY] stt_recv_ms=%s tts_start_recv_ms=%s delay_ms=%s",
+                             stt_recv_ms.c_str(),
+                             tts_start_recv_ms.c_str(),
+                             delay_ms.c_str());
+                    ai_stt_recv_timestamp_ms_ = 0;
+                } else {
+                    ESP_LOGW(TAG,
+                             "[AI_LATENCY] missing stt before tts_start, tts_start_recv_ms=%lld",
+                             tts_start_recv_timestamp_ms);
+                }
                 if (GetDeviceState() == kDeviceStateIdle || GetDeviceState() == kDeviceStateListening){
                     audio_service_.ResetDecoder(); //这里涉及到任务投递执行，所有resetdecoder需要提前做。不然前面一两帧音频都丢失
                 }
@@ -670,15 +734,17 @@ void Application::InitializeProtocol() {
                     }
                 });
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
+                ai_sentence_start_recv_timestamp_ms_ = esp_timer_get_time() / 1000;
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
                     Schedule([display, message = std::string(text->valuestring)]() {
                         display->SetChatMessage("assistant", message.c_str());
                     });
-                }
+                } 
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
+            ai_stt_recv_timestamp_ms_ = esp_timer_get_time() / 1000;
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
@@ -747,7 +813,6 @@ void Application::InitializeProtocol() {
             ESP_LOGI(TAG, "Received custom message: %s", cJSON_PrintUnformatted(root));
             if (cJSON_IsString(song_list_str)) {
                 std::string song_list = song_list_str->valuestring;
-                auto& board = Board::GetInstance();
                 
                 Schedule([this, song_list]() {
                     std::vector<MusicInfo> searched_song_list;
@@ -1074,6 +1139,8 @@ void Application::HandleStateChangedEvent() {
 #if CONFIG_CONNECTION_TYPE_NERTC
     current_pedding_speaking_ = false;
 #endif
+    ai_sentence_start_recv_timestamp_ms_ = 0;
+    ai_stt_recv_timestamp_ms_ = 0;
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();

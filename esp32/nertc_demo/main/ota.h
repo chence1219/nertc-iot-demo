@@ -28,6 +28,9 @@ public:
     const std::string& GetFirmwareVersion() const { return firmware_version_; }
     const std::string& GetCurrentVersion() const { return current_version_; }
     const std::string& GetFirmwareUrl() const { return firmware_url_; }
+#if CONFIG_CONNECTION_TYPE_NERTC
+    const std::string& GetFirmwareMd5() const { return firmware_md5_; }
+#endif
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
     const std::string& GetDeviceSdkConfig() const { return device_sdk_config_; }
@@ -50,6 +53,9 @@ private:
     std::string current_version_;
     std::string firmware_version_;
     std::string firmware_url_;
+#if CONFIG_CONNECTION_TYPE_NERTC
+    std::string firmware_md5_;
+#endif
     std::string activation_challenge_;
     std::string device_sdk_config_;
     std::string serial_number_;

@@ -228,6 +228,8 @@ private:
     int max_opus_encode_packets_size_ = 15;
     
     std::atomic<bool> current_pedding_speaking_{false};
+    int64_t ai_sentence_start_recv_timestamp_ms_ = 0;
+    int64_t ai_stt_recv_timestamp_ms_ = 0;
 
     // touch
     static void TouchRestoreTimerCb(TimerHandle_t xTimer);

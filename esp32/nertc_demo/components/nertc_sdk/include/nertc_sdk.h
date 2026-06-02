@@ -45,10 +45,12 @@ NERTC_SDK_API int nertc_init_engine(nertc_sdk_engine_t engine, nertc_sdk_engine_
 
 /**
  * @brief 加入房间
+ * @note AI 场景推荐精简模式下默认不需要传入 token。device_id 需要后台根据 app_key 激活并绑定智能体。<br>
  * @param engine 通过 nertc_create_engine 创建且通过 nertc_init 初始化之后的引擎实例
  * @param channel_name 房间名
- * @param uid 用户id
  * @param token 动态密钥，用于对加入房间用户进行鉴权验证 <br>
+ *              AI 场景推荐精简模式下可传 nullptr 或空字符串。
+ * @param uid 用户id
  * @return 方法调用结果：<br>
  *         -   0：成功 <br>
  *         - 非0：失败 <br>
