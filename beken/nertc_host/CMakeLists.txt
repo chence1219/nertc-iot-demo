@@ -8,8 +8,6 @@ set(EXTRA_COMPONENTS_DIRS
     $ENV{ARMINO_PATH}/../components/audio_algorithms
     $ENV{ARMINO_PATH}/../components/codec/
     $ENV{ARMINO_PATH}/../components/include/avdk
-    #$ENV{ARMINO_PATH}/../components/bk_thirdparty/nertc_sdk
-    $ENV{ARMINO_PATH}/../../../../../src/nertc_sdk
     $ENV{ARMINO_PATH}/../components/bk_thirdparty
     $ENV{ARMINO_PATH}/../components/multimedia
     $ENV{ARMINO_PATH}/../components/avdk_utils

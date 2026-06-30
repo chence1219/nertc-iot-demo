@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SDK_ROOT="${SDK_ROOT:-$ROOT_DIR/bk_aidk}"
 PROJECT_DIR="${PROJECT_DIR:-$ROOT_DIR/nertc_host}"
-SRC_ROOT="${SRC_ROOT:-$(cd "$ROOT_DIR/../.." && pwd)/src}"
 SOC="${SOC:-bk7258}"
 JOBS="${JOBS:-24}"
 IMAGE="${IMAGE:-bekencorp/armino-idk:1.2}"
@@ -21,15 +20,9 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
     exit 1
 fi
 
-if [[ ! -d "$SRC_ROOT" ]]; then
-    echo "Source root not found: $SRC_ROOT" >&2
-    exit 1
-fi
-
 exec docker run --rm \
     -v "$SDK_ROOT:/armino" \
     -v "$PROJECT_DIR:/armino/projects/nertc_host" \
-    -v "$SRC_ROOT:/src" \
     -w /armino \
     -u "$USER_ID" \
     "$IMAGE" \
